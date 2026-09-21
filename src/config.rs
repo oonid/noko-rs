@@ -19,22 +19,6 @@ pub struct Config {
     pub db_tx_max_retries: u32,
 }
 
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("database_url", &self.database_url)
-            .field("bind_addr", &self.bind_addr)
-            .field("auth_mode", &self.auth_mode)
-            .field(
-                "nocodb_service_token",
-                &self.nocodb_service_token.as_ref().map(|_| "[REDACTED]"),
-            )
-            .field("nocodb_service_actor_id", &self.nocodb_service_actor_id)
-            .field("db_tx_max_retries", &self.db_tx_max_retries)
-            .finish()
-    }
-}
-
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let database_url = env::var("DATABASE_URL")
