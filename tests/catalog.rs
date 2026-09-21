@@ -3,10 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use noko_rs::{
-    AppState,
-    app::build_router,
-    catalog::repository as catalog_repo,
-    config::Config,
+    AppState, app::build_router, catalog::repository as catalog_repo, config::Config,
     pricing::repository as pricing_repo,
 };
 use sqlx::PgPool;
@@ -146,7 +143,9 @@ async fn variant_price_rejects_negative_amount(pool: PgPool) -> sqlx::Result<()>
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn get_active_variant_and_idr_price_repositories(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
+async fn get_active_variant_and_idr_price_repositories(
+    pool: PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = pool.acquire().await?;
 
     let product_id = Uuid::new_v4();
@@ -204,7 +203,10 @@ async fn get_active_variant_and_idr_price_repositories(pool: PgPool) -> Result<(
 
     // 2. Inactive variant returns not found
     let inactive_res = catalog_repo::get_active_variant(&mut conn, inactive_var_id).await;
-    assert!(inactive_res.is_err(), "Inactive variant should return NotFound error");
+    assert!(
+        inactive_res.is_err(),
+        "Inactive variant should return NotFound error"
+    );
 
     // 3. Nonexistent variant returns not found
     let non_existent = catalog_repo::get_active_variant(&mut conn, Uuid::new_v4()).await;
@@ -272,6 +274,28 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
         "#,
     )
     .bind(active_var_id)
+    .execute(&pool)
+    .await?;
+
+    let active_var_2_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO product_variants (id, product_id, sku, title, active)
+        VALUES ($1, $2, 'TSHIRT-L', 'Large', true)
+        "#,
+    )
+    .bind(active_var_2_id)
+    .bind(active_prod_id)
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO variant_prices (variant_id, currency_code, amount)
+        VALUES ($1, 'IDR', 130000)
+        "#,
+    )
+    .bind(active_var_2_id)
     .execute(&pool)
     .await?;
 
@@ -356,19 +380,29 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
     let json: serde_json::Value = serde_json::from_slice(&body_bytes)?;
 
     let products = json["products"].as_array().expect("products array");
-    assert_eq!(products.len(), 1, "Only the active product should be listed");
+    assert_eq!(
+        products.len(),
+        1,
+        "Only the active product should be listed"
+    );
     assert_eq!(products[0]["id"], active_prod_id.to_string());
     assert_eq!(products[0]["title"], "Active T-Shirt");
 
     let variants = products[0]["variants"].as_array().expect("variants array");
-    assert_eq!(variants.len(), 1, "Only active variant with IDR price should be included");
+    assert_eq!(
+        variants.len(),
+        2,
+        "Both active variants with IDR price should be included"
+    );
     assert_eq!(variants[0]["id"], active_var_id.to_string());
+    assert_eq!(variants[1]["id"], active_var_2_id.to_string());
 
     // --- Assert 2: Variant price is represented as integer IDR ---
     let price = &variants[0]["price"];
     assert!(price.is_i64(), "Variant price must be an integer IDR");
     assert_eq!(price.as_i64(), Some(125000));
     assert_eq!(variants[0]["currency_code"], "IDR");
+    assert_eq!(variants[1]["price"], 130000);
 
     // --- Assert 3: GET /store/products/:id for active product returns 200 ---
     let req = Request::builder()
@@ -380,9 +414,12 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
     let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await?;
     let prod_json: serde_json::Value = serde_json::from_slice(&body_bytes)?;
     assert_eq!(prod_json["product"]["id"], active_prod_id.to_string());
-    let prod_variants = prod_json["product"]["variants"].as_array().expect("variants array");
-    assert_eq!(prod_variants.len(), 1);
+    let prod_variants = prod_json["product"]["variants"]
+        .as_array()
+        .expect("variants array");
+    assert_eq!(prod_variants.len(), 2);
     assert_eq!(prod_variants[0]["price"], 125000);
+    assert_eq!(prod_variants[1]["price"], 130000);
 
     // --- Assert 4: Unknown product returns 404 ---
     let unknown_id = Uuid::new_v4();

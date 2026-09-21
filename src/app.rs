@@ -82,6 +82,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
+        .merge(crate::api::router())
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()
