@@ -9,20 +9,53 @@ use tower::ServiceExt;
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[tokio::test]
-async fn config_requires_database_url() {
-    let _guard = ENV_LOCK.lock().await;
-    let prev_db = std::env::var("DATABASE_URL").ok();
-    unsafe { std::env::remove_var("DATABASE_URL") };
-    assert!(Config::from_env().is_err());
-    if let Some(prev) = prev_db {
-        unsafe { std::env::set_var("DATABASE_URL", prev) };
+struct EnvGuard {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+    prev_state: std::collections::HashMap<&'static str, Option<String>>,
+}
+
+impl EnvGuard {
+    async fn acquire() -> Self {
+        let _lock = ENV_LOCK.lock().await;
+        let vars = [
+            "DATABASE_URL",
+            "BIND_ADDR",
+            "AUTH_MODE",
+            "NOCODB_SERVICE_TOKEN",
+            "NOCODB_SERVICE_ACTOR_ID",
+            "DB_TX_MAX_RETRIES",
+        ];
+        let mut prev_state = std::collections::HashMap::new();
+        for var in vars {
+            prev_state.insert(var, std::env::var(var).ok());
+        }
+        Self { _lock, prev_state }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            for (key, val) in &self.prev_state {
+                match val {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 }
 
 #[tokio::test]
+async fn config_requires_database_url() {
+    let _guard = EnvGuard::acquire().await;
+    unsafe { std::env::remove_var("DATABASE_URL") };
+    assert!(Config::from_env().is_err());
+}
+
+#[tokio::test]
 async fn config_loads_defaults_and_env_vars() {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = EnvGuard::acquire().await;
     unsafe {
         std::env::set_var(
             "DATABASE_URL",
@@ -44,12 +77,12 @@ async fn config_loads_defaults_and_env_vars() {
     assert_eq!(config.auth_mode, "dev");
     assert_eq!(config.nocodb_service_token, None);
     assert_eq!(config.nocodb_service_actor_id, None);
-    assert_eq!(config.db_tx_max_retries, 3);
+    assert_eq!(config.db_tx_max_retries, 2);
 }
 
 #[tokio::test]
 async fn config_loads_custom_env_vars() {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = EnvGuard::acquire().await;
     let actor_id = uuid::Uuid::new_v4();
     unsafe {
         std::env::set_var(
@@ -60,7 +93,7 @@ async fn config_loads_custom_env_vars() {
         std::env::set_var("AUTH_MODE", "dev_header");
         std::env::set_var("NOCODB_SERVICE_TOKEN", "secret-token");
         std::env::set_var("NOCODB_SERVICE_ACTOR_ID", actor_id.to_string());
-        std::env::set_var("DB_TX_MAX_RETRIES", "5");
+        std::env::set_var("DB_TX_MAX_RETRIES", "1");
     }
 
     let config = Config::from_env().expect("config should load with custom env vars");
@@ -68,33 +101,52 @@ async fn config_loads_custom_env_vars() {
     assert_eq!(config.auth_mode, "dev_header");
     assert_eq!(config.nocodb_service_token.as_deref(), Some("secret-token"));
     assert_eq!(config.nocodb_service_actor_id, Some(actor_id));
-    assert_eq!(config.db_tx_max_retries, 5);
+    assert_eq!(config.db_tx_max_retries, 1);
 }
 
 #[tokio::test]
 async fn config_rejects_invalid_values() {
-    let _guard = ENV_LOCK.lock().await;
-    let prev_db = std::env::var("DATABASE_URL").ok();
+    let _guard = EnvGuard::acquire().await;
     unsafe {
         std::env::set_var("DATABASE_URL", "postgres://localhost/test");
         std::env::set_var("NOCODB_SERVICE_ACTOR_ID", "not-a-uuid");
     }
     assert!(Config::from_env().is_err());
+}
 
+#[tokio::test]
+async fn config_db_tx_max_retries() {
+    let _guard = EnvGuard::acquire().await;
     unsafe {
-        std::env::remove_var("NOCODB_SERVICE_ACTOR_ID");
-        std::env::set_var("DB_TX_MAX_RETRIES", "not-a-number");
+        std::env::set_var(
+            "DATABASE_URL",
+            "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test",
+        );
     }
+
+    // unset -> 2
+    unsafe { std::env::remove_var("DB_TX_MAX_RETRIES") };
+    assert_eq!(Config::from_env().unwrap().db_tx_max_retries, 2);
+
+    // 0 -> accepted
+    unsafe { std::env::set_var("DB_TX_MAX_RETRIES", "0") };
+    assert_eq!(Config::from_env().unwrap().db_tx_max_retries, 0);
+
+    // 1 -> accepted
+    unsafe { std::env::set_var("DB_TX_MAX_RETRIES", "1") };
+    assert_eq!(Config::from_env().unwrap().db_tx_max_retries, 1);
+
+    // 2 -> accepted
+    unsafe { std::env::set_var("DB_TX_MAX_RETRIES", "2") };
+    assert_eq!(Config::from_env().unwrap().db_tx_max_retries, 2);
+
+    // 3 -> ConfigError
+    unsafe { std::env::set_var("DB_TX_MAX_RETRIES", "3") };
     assert!(Config::from_env().is_err());
 
-    unsafe {
-        std::env::remove_var("DB_TX_MAX_RETRIES");
-        if let Some(prev) = prev_db {
-            std::env::set_var("DATABASE_URL", prev);
-        } else {
-            std::env::remove_var("DATABASE_URL");
-        }
-    }
+    // non-numeric -> ConfigError
+    unsafe { std::env::set_var("DB_TX_MAX_RETRIES", "abc") };
+    assert!(Config::from_env().is_err());
 }
 
 #[tokio::test]
@@ -108,7 +160,7 @@ async fn health_live_returns_200_and_propagates_request_id() {
         auth_mode: "dev".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
-        db_tx_max_retries: 3,
+        db_tx_max_retries: 2,
     });
     let state = AppState { pool, config };
     let app = build_router(state);
@@ -140,7 +192,7 @@ async fn health_live_generates_request_id_if_absent() {
         auth_mode: "dev".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
-        db_tx_max_retries: 3,
+        db_tx_max_retries: 2,
     });
     let state = AppState { pool, config };
     let app = build_router(state);
@@ -169,7 +221,7 @@ async fn health_ready_returns_503_when_database_unreachable() {
         auth_mode: "dev".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
-        db_tx_max_retries: 3,
+        db_tx_max_retries: 2,
     });
     let state = AppState { pool, config };
     let app = build_router(state);
@@ -185,7 +237,7 @@ async fn health_ready_returns_503_when_database_unreachable() {
 
 #[tokio::test]
 async fn health_ready_returns_200_when_database_connected() {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = EnvGuard::acquire().await;
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
 
@@ -199,7 +251,7 @@ async fn health_ready_returns_200_when_database_connected() {
         auth_mode: "dev".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
-        db_tx_max_retries: 3,
+        db_tx_max_retries: 2,
     });
     let state = AppState { pool, config };
     let app = build_router(state);
@@ -215,7 +267,7 @@ async fn health_ready_returns_200_when_database_connected() {
 
 #[tokio::test]
 async fn binary_starts_and_gracefully_shuts_down() {
-    let _guard = ENV_LOCK.lock().await;
+    let _guard = EnvGuard::acquire().await;
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
 
