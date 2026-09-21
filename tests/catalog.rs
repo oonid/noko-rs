@@ -204,13 +204,76 @@ async fn get_active_variant_and_idr_price_repositories(
     // 2. Inactive variant returns not found
     let inactive_res = catalog_repo::get_active_variant(&mut conn, inactive_var_id).await;
     assert!(
-        inactive_res.is_err(),
-        "Inactive variant should return NotFound error"
+        matches!(inactive_res, Err(noko_rs::error::AppError::NotFound { ref code, .. }) if code == "VARIANT_NOT_FOUND"),
+        "Inactive variant should return VARIANT_NOT_FOUND error"
     );
 
     // 3. Nonexistent variant returns not found
     let non_existent = catalog_repo::get_active_variant(&mut conn, Uuid::new_v4()).await;
-    assert!(non_existent.is_err());
+    assert!(
+        matches!(non_existent, Err(noko_rs::error::AppError::NotFound { ref code, .. }) if code == "VARIANT_NOT_FOUND"),
+        "Nonexistent variant should return VARIANT_NOT_FOUND error"
+    );
+
+    // 3a. Draft product + active variant returns not found
+    let draft_prod_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO products (id, title, description, status)
+        VALUES ($1, 'Draft Product', 'Description', 'draft')
+        "#,
+    )
+    .bind(draft_prod_id)
+    .execute(&mut *conn)
+    .await?;
+
+    let draft_var_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO product_variants (id, product_id, sku, title, active)
+        VALUES ($1, $2, 'DRAFT-VAR', 'Draft Variant', true)
+        "#,
+    )
+    .bind(draft_var_id)
+    .bind(draft_prod_id)
+    .execute(&mut *conn)
+    .await?;
+
+    let draft_res = catalog_repo::get_active_variant(&mut conn, draft_var_id).await;
+    assert!(
+        matches!(draft_res, Err(noko_rs::error::AppError::NotFound { ref code, .. }) if code == "VARIANT_NOT_FOUND"),
+        "Draft product variant should return VARIANT_NOT_FOUND error"
+    );
+
+    // 3b. Archived product + active variant returns not found
+    let arch_prod_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO products (id, title, description, status)
+        VALUES ($1, 'Archived Product', 'Description', 'archived')
+        "#,
+    )
+    .bind(arch_prod_id)
+    .execute(&mut *conn)
+    .await?;
+
+    let arch_var_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO product_variants (id, product_id, sku, title, active)
+        VALUES ($1, $2, 'ARCH-VAR', 'Arch Variant', true)
+        "#,
+    )
+    .bind(arch_var_id)
+    .bind(arch_prod_id)
+    .execute(&mut *conn)
+    .await?;
+
+    let arch_res = catalog_repo::get_active_variant(&mut conn, arch_var_id).await;
+    assert!(
+        matches!(arch_res, Err(noko_rs::error::AppError::NotFound { ref code, .. }) if code == "VARIANT_NOT_FOUND"),
+        "Archived product variant should return VARIANT_NOT_FOUND error"
+    );
 
     // 4. Fetch IDR price
     let price = pricing_repo::get_idr_price(&mut conn, active_var_id).await?;
@@ -221,7 +284,10 @@ async fn get_active_variant_and_idr_price_repositories(
 
     // 5. Price for variant without price returns not found
     let no_price = pricing_repo::get_idr_price(&mut conn, inactive_var_id).await;
-    assert!(no_price.is_err());
+    assert!(
+        matches!(no_price, Err(noko_rs::error::AppError::NotFound { ref code, .. }) if code == "PRICE_NOT_FOUND"),
+        "Missing price should return PRICE_NOT_FOUND error"
+    );
 
     Ok(())
 }
@@ -234,7 +300,7 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
         auth_mode: "dev".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
-        db_tx_max_retries: 3,
+        db_tx_max_retries: 2,
     });
     let state = AppState {
         pool: pool.clone(),

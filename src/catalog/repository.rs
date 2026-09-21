@@ -9,9 +9,10 @@ pub async fn get_active_variant(
 ) -> Result<ProductVariant, AppError> {
     let variant = sqlx::query_as::<_, ProductVariant>(
         r#"
-        SELECT id, product_id, sku, title, active, created_at, updated_at
-        FROM product_variants
-        WHERE id = $1 AND active = true
+        SELECT v.id, v.product_id, v.sku, v.title, v.active, v.created_at, v.updated_at
+        FROM product_variants v
+        JOIN products p ON v.product_id = p.id
+        WHERE v.id = $1 AND v.active = true AND p.status = 'active'
         "#,
     )
     .bind(id)
