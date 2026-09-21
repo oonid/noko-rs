@@ -1,6 +1,6 @@
 # PostgreSQL-Backed Rust Commerce Modular Monolith
 
-**Status:** Approved conversational design, formal specification for review  
+**Status:** Empirically reconciled design, ready for formal review  
 **Date:** 2026-09-20  
 **Scope:** Initial commerce architecture through Order placement, with Payment as the nearest post-V1 increment
 
@@ -133,17 +133,32 @@ Reference: https://docs.medusajs.com/learn/fundamentals/modules/isolation
 Owns:
 
 - products,
-- product variants,
-- V1 fixed IDR price data.
+- product variants.
 
 Does not own:
+
+- price data,
+
 
 - stock quantities,
 - carts,
 - orders,
 - payment state.
 
-### 5.2 Inventory
+### 5.2 Pricing
+
+Owns:
+
+- variant_prices.
+
+V1 Pricing is intentionally tiny:
+- fixed price,
+- IDR only,
+- one active price per Variant.
+
+Does not import Medusa PriceSet/rule machinery.
+
+### 5.3 Inventory
 
 Owns:
 
@@ -161,7 +176,7 @@ Does not own:
 - orders,
 - fulfillment execution.
 
-### 5.3 Customer
+### 5.4 Customer
 
 Owns:
 
@@ -170,7 +185,7 @@ Owns:
 
 A Customer is not the same concept as an Actor.
 
-### 5.4 Cart
+### 5.5 Cart
 
 Owns:
 
@@ -180,7 +195,7 @@ Owns:
 
 Does not reserve inventory.
 
-### 5.5 Order
+### 5.6 Order
 
 Owns:
 
@@ -191,7 +206,7 @@ Owns:
 
 Does not own payment state or fulfillment state.
 
-### 5.6 Actor
+### 5.7 Actor
 
 Represents a principal capable of acting:
 
@@ -201,7 +216,7 @@ Represents a principal capable of acting:
 
 Actor expresses identity/provenance, not commerce-customer status and not authority by itself.
 
-### 5.7 Operation
+### 5.8 Operation
 
 Deferred until command auditing/AI operations justify it.
 
@@ -224,7 +239,7 @@ These are deliberate V1 restrictions, not permanent domain truths:
 - IDR only,
 - one fixed price per variant,
 - no discount/promotion logic,
-- free shipping,
+- free shipping (shipping_total = 0, no shipping_options table),
 - no tax model,
 - one active cart per customer,
 - no inventory reservation while merely in cart,
@@ -318,10 +333,11 @@ inventory_items
 ---------------
 id
 variant_id          FK -> product_variants
-sku
 created_at
 
 UNIQUE (variant_id)
+
+Note: V1 intentionally enforces 1:1 between inventory_items and product_variants. Medusa supports M:N (bundles), but V1 simplifies this. SKU remains strictly in product_variants.
 
 inventory_levels
 ----------------
@@ -363,13 +379,14 @@ Availability:
 available_quantity = stocked_quantity - reserved_quantity
 ```
 
-Required invariants include:
+Required hard database constraints include:
 
 ```text
 stocked_quantity >= 0
 reserved_quantity >= 0
-reserved_quantity <= stocked_quantity
 ```
+
+Do **not** enforce `reserved_quantity <= stocked_quantity` as a permanent DB CHECK. A physical stock loss/correction may drop `stocked_quantity` below `reserved_quantity`, yielding a negative `available_quantity` (a truthful shortage state). New checkout attempts must enforce `available_quantity >= requested_quantity`.
 
 The one-location restriction is an application policy. The schema still models Location and InventoryLevel so multi-location support does not require collapsing stock onto ProductVariant.
 
@@ -439,6 +456,8 @@ cart_items
 id
 cart_id             FK -> carts
 variant_id          FK -> product_variants
+variant_title
+sku
 quantity
 unit_price
 created_at
@@ -465,7 +484,7 @@ UNIQUE (cart_id, kind)
 
 V1 requires one active cart per customer, preferably enforced with a PostgreSQL partial unique index.
 
-`cart_items.unit_price` is a checkout snapshot. A later catalog price edit does not silently change an existing cart. Future repricing behavior, if needed, must be explicit.
+`cart_items` snapshots `variant_title`, `sku`, and `unit_price` explicitly at the time of addition. A later catalog price edit does not silently change an existing cart. Future repricing behavior, if needed, must be explicit.
 
 ### 8.5 Order
 
@@ -564,9 +583,10 @@ receive shipment      adjustment +20
 damaged stock         adjustment -2
 manual correction     adjustment +/-N
 
-order placement       reservation +N
-order cancellation    reservation release
-future fulfillment    consume stocked + reserved quantities
+add to cart           stocked unchanged, reserved unchanged
+checkout              stocked unchanged, reserved +N
+order cancellation    stocked unchanged, reserved -N
+fulfillment           stocked -N, reserved -N
 ```
 
 This follows Medusa's current reservation model: order placement through cart completion creates reservations, reservations raise `reserved_quantity` while leaving `stocked_quantity` unchanged, cancellation releases reservations, and fulfillment consumes both stocked and reserved quantities.
@@ -585,7 +605,16 @@ Each operation is a small Rust unit with explicit input, validation, transaction
 Initial operations:
 
 ```text
+create_sellable_variant
 create_or_get_active_cart
+add_cart_item
+update_cart_item
+remove_cart_item
+set_cart_shipping_address
+adjust_inventory
+complete_cart
+cancel_order
+```
 add_cart_item
 update_cart_item
 remove_cart_item
@@ -621,6 +650,20 @@ complete_cart
 
 The application layer owns the cross-module transaction boundary.
 
+### 11.2 Provisioning a Sellable Variant
+
+`application::create_sellable_variant` orchestrates cross-module creation:
+
+```text
+BEGIN
+Catalog: create product_variant
+Pricing: create fixed IDR variant_price
+Inventory: create inventory_item
+Inventory: create inventory_level at MAIN
+COMMIT
+```
+This prevents creating orphan sellable Variants lacking required price/inventory records.
+
 ## 12. Cart and checkout behavior
 
 ### 12.1 Add cart item
@@ -629,11 +672,15 @@ The application layer owns the cross-module transaction boundary.
 
 1. derives the customer from authenticated context,
 2. verifies cart ownership and active state,
-3. loads active variant and current fixed IDR price from Catalog,
+3. loads active variant and current fixed IDR price from Pricing,
 4. checks current Inventory availability as an advisory validation,
 5. writes/updates CartItem with a unit-price snapshot.
 
 Adding an item to a cart does **not** reserve inventory.
+
+### 12.1.1 Stale Cart Price behavior
+
+At checkout, if the CartItem `unit_price` snapshot differs from the current `variant_prices.amount`, the operation must fail with `409 CART_PRICE_CHANGED` (including authoritative price data for the client to acknowledge). There is no silent repricing or indefinite silent acceptance of old prices.
 
 Two customers may therefore both temporarily hold cart quantities whose sum exceeds currently available stock. Final allocation occurs only at `complete_cart`.
 
@@ -654,73 +701,52 @@ Conceptual transaction:
 ```text
 BEGIN
 
-1. SELECT cart FOR UPDATE
+1. Lock Cart row:
+   SELECT ... FOR UPDATE
 
-2. If cart is already completed:
-       load order by cart_id
-       return existing order
+2. If already completed:
+   return existing Order
 
 3. Validate:
-       authenticated customer owns cart
-       cart is active
-       cart has items
-       shipping address exists
+   - ownership / customer
+   - non-empty items
+   - address
+   - active variants
+   - current prices
 
-4. Load inventory levels
-       lock rows in deterministic ID order
+4. If price differs from CartItem snapshot:
+   fail CART_PRICE_CHANGED
 
-5. Validate:
-       available_quantity >= requested quantity
-       for every cart item
+5. Resolve required MAIN InventoryLevels.
 
-6. Create Order
+6. Lock InventoryLevels in deterministic order:
+   SELECT ... FOR UPDATE ORDER BY inventory_level.id
 
-7. Snapshot:
-       customer reference
-       item SKU/title/unit price
-       shipping address
-       subtotal/total
+7. Recompute availability.
 
-8. Create InventoryReservations
+8. Reject insufficient inventory.
 
-9. Increase InventoryLevel.reserved_quantity
+9. Insert Order.
 
-10. Mark Cart completed
+10. Insert OrderItems from CartItem snapshots.
+
+11. Insert OrderAddress from CartAddress.
+
+12. Insert InventoryReservations.
+
+13. Increment reserved_quantity.
+
+14. Mark Cart completed.
 
 COMMIT
 
 return order_id
 ```
 
-### 13.1 Atomicity invariant
+### 13.1 Concurrency and Idempotency
 
-A successful `complete_cart` means all required Order, snapshot, reservation, and Cart-completion changes commit together.
-
-If any step fails, none commit.
-
-While all consequential effects live in PostgreSQL, one ACID transaction is preferred over compensation/saga machinery.
-
-### 13.2 Idempotency
-
-Two safeguards are mandatory:
-
-1. lock the Cart row during completion,
-2. enforce `orders.cart_id UNIQUE`.
-
-Repeated completion for the same cart returns the existing order instead of creating a second order.
-
-The current Medusa `completeCartWorkflow` also explicitly protects cart-completion idempotency/concurrency and creates inventory reservations during order placement. This project adopts the invariant while using PostgreSQL locking/uniqueness instead of Medusa's workflow engine.
-
-References:
-
-- https://docs.medusajs.com/resources/storefront-development/checkout/complete-cart
-- https://github.com/medusajs/medusa/blob/48a8812735f6630bcc12b3997b6d1d1f559cd492/packages/core/core-flows/src/cart/workflows/complete-cart.ts
-
-### 13.3 Deterministic inventory locking
-
-When multiple inventory rows must be locked, acquire them in a deterministic order, for example by inventory-level ID.
-
-This reduces avoidable deadlocks for concurrent orders containing overlapping variants.
+* **Concurrency:** Handled via deterministic PostgreSQL row locking (`SELECT ... FOR UPDATE ORDER BY id` on `inventory_levels`). This replaces Medusa's distributed workflow/locking mechanisms, completely preventing deadlocks and overselling within a single database.
+* **Idempotency:** Enforced via `orders.cart_id UNIQUE` and checking the Cart's locked `completed_at` status. A retry simply returns the existing Order.
 
 ## 14. Inventory adjustment command
 
@@ -739,13 +765,7 @@ UPDATE inventory_level.stocked_quantity
 COMMIT
 ```
 
-V1 rejects an adjustment that would violate:
-
-```text
-stocked_quantity >= reserved_quantity
-```
-
-This preserves committed inventory.
+Do **not** reject an adjustment merely because `new stocked_quantity < reserved_quantity`. If that happens, availability becomes negative, signaling an operational shortage. Physical truth takes precedence.
 
 ## 15. Order cancellation
 
@@ -927,20 +947,16 @@ Direct PostgreSQL edits through NocoDB are permitted for maintained facts such a
 - product title/description/status,
 - variant metadata/SKU/active flag,
 - V1 fixed price,
-- selected customer profile fields,
-- customer saved addresses.
+- selected customer profile fields (profile maintenance).
 
-Business transitions go through Rust:
+Business transitions MUST go through Rust:
 
+- create sellable variant (to ensure full Price/Inventory provisioning),
 - inventory adjustment,
-- inventory reservation/release,
 - order cancellation,
-- future payment verification/refund,
-- future fulfillment operations.
+- identity-bound Customer/Actor provisioning.
 
-Rule:
-
-> Editing describes maintained data; commands perform business actions.
+Rule: NocoDB must not directly create a `product_variant` if doing so bypasses Pricing and Inventory provisioning.
 
 ### 19.3 NocoDB workflows
 
@@ -1128,7 +1144,7 @@ Automatic retries are narrow and only apply to known transient infrastructure/co
 
 Retry the **whole idempotent application operation**, not an arbitrary SQL fragment.
 
-Domain conflicts such as insufficient inventory are never blindly retried.
+Domain conflicts such as `CART_PRICE_CHANGED`, `INSUFFICIENT_INVENTORY`, `VARIANT_INACTIVE`, `ORDER_CANCELLED`, and validation errors are never blindly retried.
 
 The concrete retry count is an implementation detail and may remain small and bounded.
 
@@ -1234,17 +1250,18 @@ Examples:
 
 Mandatory examples:
 
-```text
-complete_cart creates exactly one order
-complete_cart snapshots item data
-complete_cart reserves inventory
-complete_cart marks cart completed
-complete_cart is idempotent
-concurrent completion cannot oversell
-cancel_order releases reservation once
-inventory adjustment cannot breach reserved quantity
-transaction failure rolls back order/reservation/cart changes
-```
+- `complete_cart` creates exactly one order
+- `complete_cart` snapshots item data
+- `complete_cart` reserves inventory
+- `complete_cart` marks cart completed
+- `complete_cart` is idempotent (repeat returns same Order)
+- Concurrent completion cannot oversell (exactly one checkout succeeds)
+- `cancel_order` releases reservation once (reserved decreases, stocked unchanged)
+- Inventory adjustment may produce negative availability but never negative stocked_quantity
+- New reservation rejects insufficient availability
+- Transaction failure rolls back order/reservation/cart changes
+- Price changes after add-to-cart → `409 CART_PRICE_CHANGED`
+- Catalog mutation after Cart/Order creation does not mutate snapshots
 
 ### 27.3 Concurrency test
 
@@ -1265,7 +1282,6 @@ Verify actual PostgreSQL constraints for:
 - one order per cart,
 - one level per inventory item/location,
 - non-negative stock and reservations,
-- reserved <= stocked,
 - foreign-key integrity.
 
 ### 27.5 NocoDB-role acceptance test
@@ -1402,27 +1418,19 @@ This is the intended architecture sequence, not yet the detailed implementation 
 - request IDs,
 - live/ready endpoints.
 
-Success: server starts, migration runs, database readiness is observable.
-
 ### Increment 1 - Catalog
 
 - products,
 - variants,
-- fixed IDR prices,
 - Store product reads,
 - NocoDB catalog maintenance.
 
-Success: operators maintain catalog in NocoDB; storefront consumes it through Rust.
+### Increment 2 - Pricing + Inventory schema/core
 
-### Increment 2 - Inventory
-
-- one seeded MAIN location,
+- variant price,
+- MAIN location,
 - inventory items/levels/adjustments,
-- availability query,
-- `/ops/inventory/adjustments`,
-- NocoDB inventory summary/action.
-
-Success: useful catalog + inventory system before checkout exists.
+- availability query.
 
 ### Increment 3 - Actor + Customer
 
@@ -1432,9 +1440,14 @@ Success: useful catalog + inventory system before checkout exists.
 - authentication adapter,
 - Store `/me` and address APIs.
 
-Success: registered customer identity exists without guest complexity.
+### Increment 4 - Operations foundation
 
-### Increment 4 - Cart
+- `create_sellable_variant`,
+- `adjust_inventory`,
+- NocoDB command seam.
+*(Must not expose authenticated Ops before Actor/Auth exists).*
+
+### Increment 5 - Cart
 
 - active cart,
 - cart items,
@@ -1442,17 +1455,13 @@ Success: registered customer identity exists without guest complexity.
 - add/update/remove item,
 - set shipping address.
 
-Success: authenticated customer can prepare a checkout.
-
-### Increment 5 - Order + Reservation
+### Increment 6 - Order + Reservation
 
 - orders/order items/order addresses,
 - inventory reservations,
 - `complete_cart`,
 - `cancel_order`,
 - locking/idempotency/concurrency tests.
-
-Success: first complete commerce milestone.
 
 ### Increment 6 - NocoDB operational hardening
 
