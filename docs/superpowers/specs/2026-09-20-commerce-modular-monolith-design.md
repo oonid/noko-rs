@@ -82,13 +82,13 @@ Storefront          NocoDB Interfaces          AI / Services
                   application operations
                            |
           +----------------+----------------+
-          |                |                |
-          v                v                v
-       Catalog          Inventory        Customer
-          |                |                |
-          +----------------+----------------+
+          |        |       |        |       |
+          v        v       v        v       v
+       Catalog  Pricing Inventory Customer Actor
+          |        |       |        |       |
+          +--------+-------+--------+-------+
                            |
-                       Cart / Order
+                      Cart / Order
                            |
                            v
                        PostgreSQL
@@ -263,7 +263,7 @@ no price lists
 no customer-group pricing
 ```
 
-The V1 fixed price may be stored in a small `variant_prices` table rather than directly on `product_variants`, preserving a clean extraction point for a future Pricing module without implementing that module now.
+`variant_prices` is deliberately kept separate from `product_variants` to preserve Pricing ownership while keeping V1 pricing minimal.
 
 ### 7.2 POINT
 
@@ -305,6 +305,11 @@ active
 created_at
 updated_at
 
+```
+
+### 8.2 Pricing
+
+```text
 variant_prices
 --------------
 id
@@ -319,7 +324,7 @@ UNIQUE (variant_id, currency_code)
 
 V1 policy: exactly one IDR price per active variant.
 
-### 8.2 Inventory
+### 8.3 Inventory
 
 ```text
 inventory_locations
@@ -390,7 +395,7 @@ Do **not** enforce `reserved_quantity <= stocked_quantity` as a permanent DB CHE
 
 The one-location restriction is an application policy. The schema still models Location and InventoryLevel so multi-location support does not require collapsing stock onto ProductVariant.
 
-### 8.3 Actor and Customer
+### 8.4 Actor and Customer
 
 ```text
 actors
@@ -438,7 +443,7 @@ updated_at
 
 For V1, a customer has an Actor because checkout is registered-only. Human operators, agents, and services may have Actors without Customers.
 
-### 8.4 Cart
+### 8.5 Cart
 
 ```text
 carts
@@ -486,7 +491,7 @@ V1 requires one active cart per customer, preferably enforced with a PostgreSQL 
 
 `cart_items` snapshots `variant_title`, `sku`, and `unit_price` explicitly at the time of addition. A later catalog price edit does not silently change an existing cart. Future repricing behavior, if needed, must be explicit.
 
-### 8.5 Order
+### 8.6 Order
 
 ```text
 orders
@@ -614,16 +619,8 @@ set_cart_shipping_address
 adjust_inventory
 complete_cart
 cancel_order
-```
-add_cart_item
-update_cart_item
-remove_cart_item
-set_cart_shipping_address
-adjust_inventory
-complete_cart
-cancel_order
-```
 
+```
 ### 11.1 Module operations vs application operations
 
 Example module operations:
@@ -672,7 +669,7 @@ This prevents creating orphan sellable Variants lacking required price/inventory
 
 1. derives the customer from authenticated context,
 2. verifies cart ownership and active state,
-3. loads active variant and current fixed IDR price from Pricing,
+3. loads the active Variant from Catalog and its current fixed IDR price from Pricing,
 4. checks current Inventory availability as an advisory validation,
 5. writes/updates CartItem with a unit-price snapshot.
 
@@ -743,9 +740,17 @@ COMMIT
 return order_id
 ```
 
-### 13.1 Concurrency and Idempotency
+### 13.1 Atomicity
 
-* **Concurrency:** Handled via deterministic PostgreSQL row locking (`SELECT ... FOR UPDATE ORDER BY id` on `inventory_levels`). This replaces Medusa's distributed workflow/locking mechanisms, completely preventing deadlocks and overselling within a single database.
+A successful `complete_cart` commits Order, snapshots, reservations, inventory counters, and Cart completion together.
+
+If any step fails, none of those changes commit.
+
+This atomicity is a central reason `noko-rs` can avoid compensation machinery in V1.
+
+### 13.2 Concurrency and Idempotency
+
+* **Concurrency:** Handled via deterministic PostgreSQL row locking (`SELECT ... FOR UPDATE ORDER BY id` on `inventory_levels`). This replaces Medusa's distributed workflow/locking mechanisms. Deterministic lock ordering reduces avoidable deadlock risk. Row locking plus availability revalidation prevents overselling for the inventory rows covered by the transaction.
 * **Idempotency:** Enforced via `orders.cart_id UNIQUE` and checking the Cart's locked `completed_at` status. A retry simply returns the existing Order.
 
 ## 14. Inventory adjustment command
@@ -758,7 +763,7 @@ Inventory quantities are not ordinary NocoDB-editable fields.
 BEGIN
 
 SELECT inventory_level FOR UPDATE
-validate resulting quantity
+validate resulting stocked_quantity >= 0
 INSERT inventory_adjustment
 UPDATE inventory_level.stocked_quantity
 
@@ -1013,12 +1018,33 @@ Recommended V1 posture:
 | customers | selected fields editable |
 | customer_addresses | editable |
 | carts | read-only |
-| cart_items | read-only || cart_addresses | read-only |
+| cart_items | read-only |
+| cart_addresses | read-only |
 | orders | read-only |
 | order_items | read-only |
 | order_addresses | read-only |
 | actors | hidden or read-only |
 | operation_requests | read-only once introduced |
+
+**PostgreSQL is the authoritative security boundary**. For the "editable" tables, permissions must distinguish operations:
+
+```text
+products
+    INSERT/UPDATE selected maintained fields allowed
+    DELETE denied
+
+product_variants
+    UPDATE selected metadata fields allowed
+    INSERT denied
+    DELETE denied
+
+variant_prices
+    UPDATE existing V1 price allowed if desired
+    INSERT denied through direct NocoDB path
+    DELETE denied
+```
+
+A new sellable Variant (including its initial price and Inventory provisioning) must strictly go through `create_sellable_variant` rather than unrestricted INSERTs.
 
 ### 20.2 PostgreSQL is authoritative for access control
 
@@ -1463,7 +1489,7 @@ This is the intended architecture sequence, not yet the detailed implementation 
 - `cancel_order`,
 - locking/idempotency/concurrency tests.
 
-### Increment 6 - NocoDB operational hardening
+### Increment 7 - NocoDB operational hardening
 
 - dedicated PostgreSQL role/grants,
 - read-only transactional tables,
@@ -1472,37 +1498,37 @@ This is the intended architecture sequence, not yet the detailed implementation 
 - inventory adjustment Interface,
 - operator read views when needed.
 
-### Increment 7 - Payment
+### Increment 8 - Payment
 
 Payment is the nearest major capability after Order.
 
 It receives a separate design/spec because choices such as manual transfer vs provider, authorization/capture semantics, payment attempts, provider idempotency, and reconciliation materially change its architecture.
 
-### Increment 8 - Operation audit / AI controls
+### Increment 9 - Operation audit / AI controls
 
 - operation_requests,
 - durable command provenance,
 - agent principals,
 - risk-based approval interception where required.
 
-### Increment 9 - Fulfillment
+### Increment 10 - Fulfillment
 
 - shipment/fulfillment lifecycle,
 - consume reservations,
 - carrier/warehouse integration where required.
 
-### Increment 10 - POINT / mixed settlement
+### Increment 11 - POINT / mixed settlement
 
 - wallet/account,
 - immutable ledger,
 - conversion policy,
 - POINT-only and mixed IDR+POINT settlement.
 
-### Increment 11 - Advanced pricing/promotions
+### Increment 12 - Advanced pricing/promotions
 
 Introduce richer Pricing/Promotion modules only when product requirements demand them.
 
-### Increment 12 - Events / outbox / durable workflows
+### Increment 13 - Events / outbox / durable workflows
 
 Introduce only when external side effects, asynchronous integrations, or operational scale justify them.
 
