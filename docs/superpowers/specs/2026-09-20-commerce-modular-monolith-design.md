@@ -1,6 +1,6 @@
 # PostgreSQL-Backed Rust Commerce Modular Monolith
 
-**Status:** Empirically reconciled design, ready for formal review  
+**Status:** Approved architecture  
 **Date:** 2026-09-20  
 **Scope:** Initial commerce architecture through Order placement, with Payment as the nearest post-V1 increment
 
@@ -1414,7 +1414,7 @@ Prefer capability-oriented migration increments rather than one large initial mi
 
 ```text
 001_catalog.sql
-002_inventory.sql
+002_pricing_inventory.sql
 003_actor_customer.sql
 004_cart.sql
 005_order.sql
@@ -1556,11 +1556,11 @@ Scope:
 Inventory module + application::adjust_inventory only.
 
 Invariant:
-stocked_quantity must never become lower than reserved_quantity.
+physical adjustment enforces stocked_quantity >= 0 and may produce negative availability.
 
 Done when:
 PostgreSQL integration tests cover positive adjustment,
-negative adjustment, and rejection below reserved quantity.
+negative adjustment producing negative availability, and rejection below zero stocked quantity.
 ```
 
 Avoid broad tasks such as `build checkout` when they can be decomposed into valid intermediate repository states.
