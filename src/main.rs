@@ -17,6 +17,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(bind_addr = %config.bind_addr, "Starting noko-rs service");
 
     let pool = db::create_pool(&config.database_url).await?;
+    tracing::info!("Running database migrations...");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     let bind_addr = config.bind_addr.clone();
 
     let state = AppState {
