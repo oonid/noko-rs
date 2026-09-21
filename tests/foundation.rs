@@ -171,6 +171,7 @@ async fn health_ready_returns_503_when_database_unreachable() {
 
 #[tokio::test]
 async fn health_ready_returns_200_when_database_connected() {
+    let _guard = ENV_LOCK.lock().await;
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
 

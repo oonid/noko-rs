@@ -35,8 +35,9 @@ pub enum AppError {
 impl AppError {
     pub fn validation(code: impl Into<String>) -> Self {
         let code = code.into();
+        let message = format!("Validation failed: {}", code);
         Self::Validation {
-            message: code.clone(),
+            message,
             code,
             details: None,
         }
@@ -52,8 +53,9 @@ impl AppError {
 
     pub fn validation_with_details(code: impl Into<String>, details: Value) -> Self {
         let code = code.into();
+        let message = format!("Validation failed: {}", code);
         Self::Validation {
-            message: code.clone(),
+            message,
             code,
             details: Some(details),
         }
