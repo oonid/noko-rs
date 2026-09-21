@@ -12,8 +12,12 @@ static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[tokio::test]
 async fn config_requires_database_url() {
     let _guard = ENV_LOCK.lock().await;
+    let prev_db = std::env::var("DATABASE_URL").ok();
     unsafe { std::env::remove_var("DATABASE_URL") };
     assert!(Config::from_env().is_err());
+    if let Some(prev) = prev_db {
+        unsafe { std::env::set_var("DATABASE_URL", prev) };
+    }
 }
 
 #[tokio::test]
@@ -70,6 +74,7 @@ async fn config_loads_custom_env_vars() {
 #[tokio::test]
 async fn config_rejects_invalid_values() {
     let _guard = ENV_LOCK.lock().await;
+    let prev_db = std::env::var("DATABASE_URL").ok();
     unsafe {
         std::env::set_var("DATABASE_URL", "postgres://localhost/test");
         std::env::set_var("NOCODB_SERVICE_ACTOR_ID", "not-a-uuid");
@@ -81,6 +86,15 @@ async fn config_rejects_invalid_values() {
         std::env::set_var("DB_TX_MAX_RETRIES", "not-a-number");
     }
     assert!(Config::from_env().is_err());
+
+    unsafe {
+        std::env::remove_var("DB_TX_MAX_RETRIES");
+        if let Some(prev) = prev_db {
+            std::env::set_var("DATABASE_URL", prev);
+        } else {
+            std::env::remove_var("DATABASE_URL");
+        }
+    }
 }
 
 #[tokio::test]
