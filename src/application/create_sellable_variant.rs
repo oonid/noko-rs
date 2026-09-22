@@ -27,7 +27,7 @@ pub async fn create_sellable_variant(
             .await?;
 
     if !product_exists {
-        return Err(AppError::not_found("Product not found"));
+        return Err(AppError::not_found("PRODUCT_NOT_FOUND"));
     }
 
     let variant_id = crate::catalog::repository::create_variant(
@@ -53,9 +53,7 @@ pub async fn create_sellable_variant(
     let price_id =
         crate::pricing::repository::create_idr_price(&mut tx, variant_id, input.amount).await?;
 
-    let item_id =
-        crate::inventory::repository::create_item(&mut tx, variant_id, &input.sku, true, true)
-            .await?;
+    let item_id = crate::inventory::repository::create_item(&mut tx, variant_id).await?;
 
     let location_id = crate::inventory::repository::find_main_location(&mut tx).await?;
 

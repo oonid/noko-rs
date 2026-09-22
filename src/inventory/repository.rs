@@ -113,13 +113,7 @@ pub async fn insert_adjustment(
 }
 
 use sqlx::PgConnection;
-pub async fn create_item(
-    conn: &mut PgConnection,
-    variant_id: Uuid,
-    _sku: &str,
-    _requires_shipping: bool,
-    _tracked: bool,
-) -> Result<Uuid, AppError> {
+pub async fn create_item(conn: &mut PgConnection, variant_id: Uuid) -> Result<Uuid, AppError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO inventory_items (variant_id)
@@ -136,7 +130,7 @@ pub async fn create_item(
 pub async fn find_main_location(conn: &mut PgConnection) -> Result<Uuid, AppError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT id FROM inventory_locations WHERE code = 'MAIN' LIMIT 1
+        SELECT id FROM inventory_locations WHERE code = 'MAIN' AND active = true
         "#,
     )
     .fetch_optional(&mut *conn)
