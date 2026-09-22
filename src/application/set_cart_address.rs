@@ -1,8 +1,8 @@
-use sqlx::PgConnection;
-use uuid::Uuid;
 use crate::cart::model::CartAddress;
 use crate::cart::repository;
 use crate::error::AppError;
+use sqlx::PgConnection;
+use uuid::Uuid;
 
 pub async fn execute(
     conn: &mut PgConnection,
@@ -15,7 +15,13 @@ pub async fn execute(
         return Err(AppError::not_found("cart_not_found"));
     }
 
-    let addr = repository::set_cart_shipping_address(&mut *conn, cart_id, customer_address_id, customer_id).await?;
+    let addr = repository::set_cart_shipping_address(
+        &mut *conn,
+        cart_id,
+        customer_address_id,
+        customer_id,
+    )
+    .await?;
     match addr {
         Some(a) => Ok(a),
         None => Err(AppError::not_found("address_not_found")),

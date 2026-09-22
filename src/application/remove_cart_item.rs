@@ -1,7 +1,7 @@
-use sqlx::PgConnection;
-use uuid::Uuid;
 use crate::cart::repository;
 use crate::error::AppError;
+use sqlx::PgConnection;
+use uuid::Uuid;
 
 pub async fn execute(
     conn: &mut PgConnection,
@@ -18,6 +18,6 @@ pub async fn execute(
     if !removed {
         return Err(AppError::not_found("item_not_found"));
     }
-    
+
     Ok(())
 }

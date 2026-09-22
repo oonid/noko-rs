@@ -1,6 +1,6 @@
+use crate::cart::model::{Cart, CartAddress, CartItem};
 use sqlx::PgConnection;
 use uuid::Uuid;
-use crate::cart::model::{Cart, CartItem, CartAddress};
 
 pub async fn create_or_get_active_cart(
     conn: &mut PgConnection,
@@ -61,7 +61,7 @@ pub async fn add_item_to_cart(
     variant_id: Uuid,
     quantity: i64,
 ) -> Result<Option<CartItem>, sqlx::Error> {
-    // 1. Snapshot variant details. 
+    // 1. Snapshot variant details.
     // Join pricing to get IDR price.
     let snapshot = sqlx::query!(
         r#"
@@ -142,7 +142,7 @@ pub async fn remove_item(
     )
     .execute(conn)
     .await?;
-    
+
     Ok(res.rows_affected() > 0)
 }
 
@@ -241,4 +241,3 @@ pub async fn get_cart_address(
     .fetch_optional(conn)
     .await
 }
-

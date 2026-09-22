@@ -1,8 +1,8 @@
 use axum::{
-    extract::{FromRequest, FromRequestParts, rejection::{JsonRejection, PathRejection}},
-    http::request::Parts,
     Json as AxumJson,
     extract::Path as AxumPath,
+    extract::{FromRequest, FromRequestParts, rejection::JsonRejection},
+    http::request::Parts,
 };
 use serde::de::DeserializeOwned;
 
