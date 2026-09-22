@@ -29,6 +29,44 @@ pub async fn execute(
         return Err(AppError::not_found("cart_not_found"));
     }
 
+    // Check inventory
+    let avail = sqlx::query!(
+        r#"
+        SELECT l.stocked_quantity, l.reserved_quantity
+        FROM inventory_items i
+        JOIN inventory_levels l ON l.inventory_item_id = i.id
+        JOIN inventory_locations loc ON loc.id = l.location_id
+        WHERE i.variant_id = $1 AND loc.code = 'MAIN'
+        "#,
+        input.variant_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let avail_qty = avail
+        .map(|a| a.stocked_quantity - a.reserved_quantity)
+        .unwrap_or(0);
+
+    // Check existing item in cart
+    let existing = sqlx::query!(
+        r#"
+        SELECT quantity FROM cart_items WHERE cart_id = $1 AND variant_id = $2
+        "#,
+        cart_id,
+        input.variant_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let existing_qty = existing.map(|e| e.quantity).unwrap_or(0);
+
+    if existing_qty + input.quantity > avail_qty {
+        return Err(AppError::bad_request(
+            "PRODUCT_NOT_AVAILABLE",
+            "Not enough inventory available",
+        ));
+    }
+
     let item =
         repository::add_item_to_cart(&mut *conn, cart_id, input.variant_id, input.quantity).await?;
     match item {

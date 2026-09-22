@@ -117,3 +117,22 @@ pub async fn create_customer(
 
     Ok(customer)
 }
+
+pub async fn get_address_for_customer(
+    conn: &mut sqlx::PgConnection,
+    customer_id: uuid::Uuid,
+    address_id: uuid::Uuid,
+) -> Result<Option<crate::customer::model::CustomerAddress>, sqlx::Error> {
+    sqlx::query_as!(
+        crate::customer::model::CustomerAddress,
+        r#"
+        SELECT id, customer_id, recipient_name, phone, address_line_1, address_line_2, city, province, postal_code, country_code, is_default, label, created_at, updated_at
+        FROM customer_addresses
+        WHERE id = $1 AND customer_id = $2
+        "#,
+        address_id,
+        customer_id
+    )
+    .fetch_optional(conn)
+    .await
+}

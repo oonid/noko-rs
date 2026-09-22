@@ -116,7 +116,7 @@ pub async fn update_item_quantity(
         r#"
         UPDATE cart_items
         SET quantity = $3, updated_at = now()
-        WHERE cart_id = $1 AND variant_id = $2
+        WHERE cart_id = $1 AND id = $2
         RETURNING id, cart_id, variant_id, variant_title, sku, quantity, unit_price, created_at, updated_at
         "#,
         cart_id,
@@ -135,7 +135,7 @@ pub async fn remove_item(
     let res = sqlx::query!(
         r#"
         DELETE FROM cart_items
-        WHERE cart_id = $1 AND variant_id = $2
+        WHERE cart_id = $1 AND id = $2
         "#,
         cart_id,
         variant_id
@@ -149,27 +149,8 @@ pub async fn remove_item(
 pub async fn set_cart_shipping_address(
     conn: &mut PgConnection,
     cart_id: Uuid,
-    customer_address_id: Uuid,
-    customer_id: Uuid,
-) -> Result<Option<CartAddress>, sqlx::Error> {
-    // 1. Get customer address
-    let address = sqlx::query!(
-        r#"
-        SELECT recipient_name, phone, address_line_1, address_line_2, city, province, postal_code, country_code
-        FROM customer_addresses
-        WHERE id = $1 AND customer_id = $2
-        "#,
-        customer_address_id,
-        customer_id
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
-
-    let addr = match address {
-        Some(a) => a,
-        None => return Ok(None),
-    };
-
+    addr: &crate::customer::model::CustomerAddress,
+) -> Result<CartAddress, sqlx::Error> {
     let cart_addr = sqlx::query_as!(
         CartAddress,
         r#"
@@ -202,7 +183,7 @@ pub async fn set_cart_shipping_address(
     .fetch_one(conn)
     .await?;
 
-    Ok(Some(cart_addr))
+    Ok(cart_addr)
 }
 
 pub async fn get_cart_items(
