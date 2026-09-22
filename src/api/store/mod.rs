@@ -1,8 +1,9 @@
 use crate::AppState;
 use axum::Router;
 
+pub mod me;
 pub mod products;
 
 pub fn router() -> Router<AppState> {
-    Router::new().merge(products::router())
+    Router::new().merge(products::router()).merge(me::router())
 }

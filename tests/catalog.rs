@@ -297,7 +297,7 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
     let config = Arc::new(Config {
         database_url: "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string(),
         bind_addr: "0.0.0.0:3000".to_string(),
-        auth_mode: "dev".to_string(),
+        auth_mode: "dev_header".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
         db_tx_max_retries: 2,

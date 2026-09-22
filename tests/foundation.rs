@@ -109,6 +109,7 @@ async fn config_rejects_invalid_values() {
     let _guard = EnvGuard::acquire().await;
     unsafe {
         std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+        std::env::set_var("AUTH_MODE", "dev_header");
         std::env::set_var("NOCODB_SERVICE_ACTOR_ID", "not-a-uuid");
     }
     assert!(Config::from_env().is_err());
@@ -157,7 +158,7 @@ async fn health_live_returns_200_and_propagates_request_id() {
     let config = Arc::new(Config {
         database_url: "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string(),
         bind_addr: "0.0.0.0:3000".to_string(),
-        auth_mode: "dev".to_string(),
+        auth_mode: "dev_header".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
         db_tx_max_retries: 2,
@@ -189,7 +190,7 @@ async fn health_live_generates_request_id_if_absent() {
     let config = Arc::new(Config {
         database_url: "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string(),
         bind_addr: "0.0.0.0:3000".to_string(),
-        auth_mode: "dev".to_string(),
+        auth_mode: "dev_header".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
         db_tx_max_retries: 2,
@@ -218,7 +219,7 @@ async fn health_ready_returns_503_when_database_unreachable() {
     let config = Arc::new(Config {
         database_url: "postgres://invalid:invalid@127.0.0.1:54321/invalid".to_string(),
         bind_addr: "0.0.0.0:3000".to_string(),
-        auth_mode: "dev".to_string(),
+        auth_mode: "dev_header".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
         db_tx_max_retries: 2,
@@ -248,7 +249,7 @@ async fn health_ready_returns_200_when_database_connected() {
     let config = Arc::new(Config {
         database_url: db_url,
         bind_addr: "0.0.0.0:3000".to_string(),
-        auth_mode: "dev".to_string(),
+        auth_mode: "dev_header".to_string(),
         nocodb_service_token: None,
         nocodb_service_actor_id: None,
         db_tx_max_retries: 2,

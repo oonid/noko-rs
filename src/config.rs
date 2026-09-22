@@ -25,7 +25,15 @@ impl Config {
             .map_err(|_| ConfigError::Missing("DATABASE_URL".to_string()))?;
 
         let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
-        let auth_mode = env::var("AUTH_MODE").unwrap_or_else(|_| "dev".to_string());
+        let auth_mode =
+            env::var("AUTH_MODE").map_err(|_| ConfigError::Missing("AUTH_MODE".to_string()))?;
+
+        if auth_mode != "dev_header" {
+            return Err(ConfigError::Invalid(
+                "AUTH_MODE".to_string(),
+                "only dev_header is supported".to_string(),
+            ));
+        }
         let nocodb_service_token = env::var("NOCODB_SERVICE_TOKEN")
             .ok()
             .filter(|s| !s.is_empty());
