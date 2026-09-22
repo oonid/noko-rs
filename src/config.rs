@@ -106,11 +106,14 @@ mod tests {
     }
 
     fn setup_env() -> EnvGuard {
-        let guard = match ENV_MUTEX.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+        let guard = match ENV_MUTEX.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         let old_db_url = env::var("DATABASE_URL");
         let old_auth_mode = env::var("AUTH_MODE");
         unsafe { env::set_var("DATABASE_URL", "postgres://test") };
-        
+
         EnvGuard {
             _guard: guard,
             old_db_url,
