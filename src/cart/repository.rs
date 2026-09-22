@@ -35,7 +35,7 @@ pub async fn create_or_get_active_cart(
     Ok(cart)
 }
 
-pub async fn lock_active_cart(
+pub async fn lock_cart(
     conn: &mut PgConnection,
     cart_id: Uuid,
     customer_id: Uuid,
@@ -45,7 +45,7 @@ pub async fn lock_active_cart(
         r#"
         SELECT id, customer_id, currency_code, status, created_at, updated_at, completed_at
         FROM carts
-        WHERE id = $1 AND customer_id = $2 AND status = 'active'
+        WHERE id = $1 AND customer_id = $2
         FOR UPDATE
         "#,
         cart_id,
@@ -108,7 +108,7 @@ pub async fn add_item_to_cart(
 pub async fn update_item_quantity(
     conn: &mut PgConnection,
     cart_id: Uuid,
-    variant_id: Uuid,
+    item_id: Uuid,
     quantity: i64,
 ) -> Result<Option<CartItem>, sqlx::Error> {
     sqlx::query_as!(
@@ -120,7 +120,7 @@ pub async fn update_item_quantity(
         RETURNING id, cart_id, variant_id, variant_title, sku, quantity, unit_price, created_at, updated_at
         "#,
         cart_id,
-        variant_id,
+        item_id,
         quantity
     )
     .fetch_optional(conn)
@@ -130,7 +130,7 @@ pub async fn update_item_quantity(
 pub async fn remove_item(
     conn: &mut PgConnection,
     cart_id: Uuid,
-    variant_id: Uuid,
+    item_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     let res = sqlx::query!(
         r#"
@@ -138,7 +138,7 @@ pub async fn remove_item(
         WHERE cart_id = $1 AND id = $2
         "#,
         cart_id,
-        variant_id
+        item_id
     )
     .execute(conn)
     .await?;

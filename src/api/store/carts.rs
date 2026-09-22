@@ -90,12 +90,6 @@ async fn add_item(
 ) -> Result<(StatusCode, Json<CartItem>), AppError> {
     let mut conn = state.pool.acquire().await?;
 
-    // Ensure cart ownership
-    let cart = repository::lock_active_cart(&mut conn, id, ctx.customer_id).await?;
-    if cart.is_none() {
-        return Err(AppError::forbidden("cart_not_found"));
-    }
-
     let item = add_cart_item::execute(&mut conn, ctx.customer_id, id, payload).await?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -108,12 +102,6 @@ async fn update_item(
 ) -> Result<Json<CartItem>, AppError> {
     let mut conn = state.pool.acquire().await?;
 
-    // Ensure cart ownership
-    let cart = repository::lock_active_cart(&mut conn, id, ctx.customer_id).await?;
-    if cart.is_none() {
-        return Err(AppError::forbidden("cart_not_found"));
-    }
-
     let item = update_cart_item::execute(&mut conn, ctx.customer_id, id, item_id, payload).await?;
     Ok(Json(item))
 }
@@ -124,12 +112,6 @@ async fn remove_item(
     Path((id, item_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
     let mut conn = state.pool.acquire().await?;
-
-    // Ensure cart ownership
-    let cart = repository::lock_active_cart(&mut conn, id, ctx.customer_id).await?;
-    if cart.is_none() {
-        return Err(AppError::forbidden("cart_not_found"));
-    }
 
     remove_cart_item::execute(&mut conn, ctx.customer_id, id, item_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -147,12 +129,6 @@ async fn set_address(
     Json(payload): Json<SetAddressInput>,
 ) -> Result<Json<CartAddress>, AppError> {
     let mut conn = state.pool.acquire().await?;
-
-    // Ensure cart ownership
-    let cart = repository::lock_active_cart(&mut conn, id, ctx.customer_id).await?;
-    if cart.is_none() {
-        return Err(AppError::forbidden("cart_not_found"));
-    }
 
     let addr =
         set_cart_address::execute(&mut conn, ctx.customer_id, id, payload.customer_address_id)

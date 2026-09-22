@@ -24,9 +24,13 @@ pub async fn execute(
         ));
     }
 
-    let cart = repository::lock_active_cart(&mut *conn, cart_id, customer_id).await?;
-    if cart.is_none() {
-        return Err(AppError::not_found("cart_not_found"));
+    let cart = repository::lock_cart(&mut *conn, cart_id, customer_id).await?;
+    let cart = match cart {
+        Some(c) => c,
+        None => return Err(AppError::forbidden("CART_NOT_FOUND")),
+    };
+    if cart.status == "completed" {
+        return Err(AppError::conflict("CART_COMPLETED"));
     }
 
     // Check inventory
