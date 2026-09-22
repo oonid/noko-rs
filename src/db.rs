@@ -12,3 +12,7 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
 pub async fn check_readiness(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT 1").execute(pool).await.map(|_| ())
 }
+
+pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    sqlx::migrate!("./migrations").run(pool).await
+}

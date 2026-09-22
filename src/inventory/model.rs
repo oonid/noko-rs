@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InventoryLocation {
     pub id: Uuid,
     pub code: String,
@@ -12,14 +13,14 @@ pub struct InventoryLocation {
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InventoryItem {
     pub id: Uuid,
     pub variant_id: Uuid,
     pub created_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InventoryLevel {
     pub id: Uuid,
     pub inventory_item_id: Uuid,
@@ -30,7 +31,7 @@ pub struct InventoryLevel {
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InventoryAdjustment {
     pub id: Uuid,
     pub inventory_item_id: Uuid,
