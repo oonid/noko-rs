@@ -111,3 +111,59 @@ pub async fn insert_adjustment(
     .await?;
     Ok(())
 }
+
+use sqlx::PgConnection;
+pub async fn create_item(
+    conn: &mut PgConnection,
+    variant_id: Uuid,
+    _sku: &str,
+    _requires_shipping: bool,
+    _tracked: bool,
+) -> Result<Uuid, AppError> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO inventory_items (variant_id)
+        VALUES ($1)
+        RETURNING id
+        "#,
+    )
+    .bind(variant_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(id)
+}
+
+pub async fn find_main_location(conn: &mut PgConnection) -> Result<Uuid, AppError> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM inventory_locations LIMIT 1
+        "#,
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| AppError::not_found("LOCATION_NOT_FOUND"))?; // fallback if no locations exist in test? Or maybe it errors?
+    Ok(id)
+}
+
+pub async fn create_level(
+    conn: &mut PgConnection,
+    item_id: Uuid,
+    location_id: Uuid,
+    stocked: i64,
+    reserved: i64,
+) -> Result<Uuid, AppError> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        "#
+    )
+    .bind(item_id)
+    .bind(location_id)
+    .bind(stocked)
+    .bind(reserved)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(id)
+}

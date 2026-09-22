@@ -72,3 +72,61 @@ impl FromRequestParts<AppState> for AuthenticatedCustomer {
         }))
     }
 }
+
+pub struct OpsCaller {
+    pub actor: AuthContext,
+}
+
+impl FromRequestParts<AppState> for OpsCaller {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        // Require Token matching config
+        let expected_token = state
+            .config
+            .nocodb_service_token
+            .as_deref()
+            .ok_or_else(|| AppError::unauthorized("NO_SERVICE_TOKEN_CONFIGURED"))?;
+
+        let expected_actor_id = state
+            .config
+            .nocodb_service_actor_id
+            .ok_or_else(|| AppError::unauthorized("NO_SERVICE_ACTOR_CONFIGURED"))?;
+
+        let auth_header = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| AppError::unauthorized("AUTH_REQUIRED"))?;
+
+        let token = auth_header
+            .strip_prefix("Bearer ")
+            .ok_or_else(|| AppError::unauthorized("INVALID_TOKEN_FORMAT"))?;
+
+        if token != expected_token {
+            return Err(AppError::unauthorized("INVALID_TOKEN"));
+        }
+
+        let actor = crate::actor::repository::get_actor_by_id(&state.pool, expected_actor_id)
+            .await?
+            .ok_or_else(|| AppError::unauthorized("SERVICE_ACTOR_NOT_FOUND"))?;
+
+        if !actor.active {
+            return Err(AppError::unauthorized("ACTOR_INACTIVE"));
+        }
+        if actor.kind != ActorKind::Service {
+            return Err(AppError::unauthorized("ACTOR_NOT_SERVICE"));
+        }
+
+        Ok(OpsCaller {
+            actor: AuthContext {
+                actor_id: actor.id,
+                actor_kind: actor.kind,
+                auth_subject: actor.auth_subject,
+            },
+        })
+    }
+}

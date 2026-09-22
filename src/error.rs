@@ -150,7 +150,7 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DATABASE_ERROR".to_string(),
-                    "Internal database error".to_string(),
+                    err.to_string(),
                     false,
                     None,
                 )

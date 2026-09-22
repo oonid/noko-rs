@@ -22,3 +22,24 @@ pub async fn get_active_variant(
 
     Ok(variant)
 }
+
+pub async fn create_variant(
+    conn: &mut PgConnection,
+    product_id: Uuid,
+    sku: &str,
+    title: &str,
+) -> Result<Uuid, AppError> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO product_variants (product_id, sku, title, active)
+        VALUES ($1, $2, $3, true)
+        RETURNING id
+        "#,
+    )
+    .bind(product_id)
+    .bind(sku)
+    .bind(title)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(id)
+}

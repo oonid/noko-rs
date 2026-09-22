@@ -19,3 +19,21 @@ pub async fn resolve_by_auth_subject(
 
     Ok(actor)
 }
+
+pub async fn get_actor_by_id(
+    pool: &sqlx::PgPool,
+    id: uuid::Uuid,
+) -> Result<Option<Actor>, AppError> {
+    let actor = sqlx::query_as::<_, Actor>(
+        r#"
+        SELECT id, kind, auth_subject, display_name, active, created_at
+        FROM actors
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(actor)
+}
