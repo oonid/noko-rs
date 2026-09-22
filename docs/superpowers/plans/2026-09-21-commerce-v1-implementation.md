@@ -649,72 +649,157 @@ git commit -m "feat: add actor customer and auth boundary"
 ### Task 5: Ops foundation and create_sellable_variant
 
 **Files:**
-- Create: src/api/ops/mod.rs
-- Create: src/api/ops/catalog.rs
-- Create: src/api/ops/inventory.rs
-- Create: src/application/create_sellable_variant.rs
-- Modify: src/application/adjust_inventory.rs
-- Modify: src/auth.rs
-- Test: tests/operations.rs
+- Create:
+  - src/api/ops/mod.rs
+  - src/api/ops/catalog.rs
+  - src/api/ops/inventory.rs
+  - src/application/create_sellable_variant.rs
+  - tests/operations.rs
+- Modify:
+  - src/api/mod.rs
+  - src/application/mod.rs
+  - src/application/adjust_inventory.rs
+  - src/auth.rs
+  - src/catalog/repository.rs
+  - src/pricing/repository.rs
+  - src/inventory/repository.rs
 
 **Interfaces:**
-- Produces: OpsCaller { actor: AuthContext }
-- Produces: POST /ops/catalog/variants
-- Produces: POST /ops/inventory/adjustments
-- Produces: CreateSellableVariantInput { product_id, sku, title, amount }
-- Produces: provenance field initiator_external_ref as untrusted audit/log context, never authorization
+- Produces: `OpsCaller { actor: AuthContext }`
+- Produces: `POST /ops/catalog/variants` -> `OpsCaller` -> `application::create_sellable_variant`
+- Produces: `POST /ops/inventory/adjustments` -> `OpsCaller` -> `application::adjust_inventory`
+- Application Operations:
+  - `CreateSellableVariantInput { product_id, sku, title, amount }`
+  - `AdjustInventoryRequest { inventory_item_id, location_id, delta, reason, note, initiator_external_ref }`
+- Rulings:
+  - **Authenticated actor_id**: Must be derived exclusively from `OpsCaller.actor.actor_id`, NEVER from the request payload.
+  - **initiator_external_ref**: Untrusted provenance/audit context only.
 
-- [ ] **Step 1: Write failing auth tests**
+- [ ] **Step 1: Write Ops auth tests**
 
-Correct Bearer token + configured service Actor -> accepted.
-Missing/wrong Bearer token -> 401.
-Payload initiator_external_ref does not alter actor_id or authorization.
+Explicitly test the V1 static Bearer authentication strategy:
+- correct Bearer token + configured active Actor(kind=service) → accepted
+- missing Authorization → 401 JSON AppError
+- wrong Bearer token → 401 JSON AppError
+- configured Actor missing → authentication rejected
+- configured Actor inactive → authentication rejected
+- configured Actor kind != service → authentication rejected
+- payload `initiator_external_ref` cannot alter authenticated `actor_id` (do not allow request `actor_id` to become authority).
 
-- [ ] **Step 2: Implement static service-principal auth**
+- [ ] **Step 2: Implement service-principal auth**
 
-Validate Authorization: Bearer against NOCODB_SERVICE_TOKEN using exact byte/string comparison suitable for this low-risk V1 service secret. Resolve NOCODB_SERVICE_ACTOR_ID and ensure that Actor is active and kind=service.
+Keep static V1 Bearer authentication. Require `Authorization: Bearer <token>` against `NOCODB_SERVICE_TOKEN`.
+Resolve `NOCODB_SERVICE_ACTOR_ID` and require the Actor exists, is active, and `kind = service`. Produce `OpsCaller { actor: AuthContext }`.
 
-- [ ] **Step 3: Write failing create_sellable_variant atomicity test**
+*Precondition: `NOCODB_SERVICE_ACTOR_ID` refers to an already-existing active `Actor(kind=service)`. Tests may seed this trust-root Actor directly. Production bootstrap of the initial service Actor is a deployment prerequisite and is not implemented as an unauthenticated HTTP API.*
 
-Force Inventory insertion to fail after Catalog and Pricing inserts (for example by pre-creating conflicting inventory_item for the variant in a controlled test) and assert no partially provisioned Variant/Price remains after rollback.
+- [ ] **Step 3: Atomicity test strategy**
 
-- [ ] **Step 4: Implement create_sellable_variant in one transaction**
+Write a real PostgreSQL atomicity test that causes Inventory provisioning to fail only AFTER ProductVariant and VariantPrice inserts have succeeded inside the transaction. Use a temporary/test-only CHECK constraint or trigger on the isolated test database.
+Do not add production failure-injection code.
+Required proof after rollback: `ProductVariant` ABSENT, `VariantPrice` ABSENT, `InventoryItem` ABSENT, `InventoryLevel` ABSENT.
 
-Sequence:
-1. validate Product exists,
-2. insert ProductVariant,
-3. insert IDR VariantPrice,
-4. insert InventoryItem,
-5. find MAIN,
-6. insert InventoryLevel with zero stock,
-7. commit.
+- [ ] **Step 4: Implement create_sellable_variant**
 
-Return IDs for variant, price, item, and level.
+Must explicitly use a single transaction. The application layer owns the transaction and orchestration; the repository modules own their respective INSERTs.
+```text
+BEGIN
+1. validate Product exists
+2. Catalog repository: create ProductVariant
+3. Pricing repository: create fixed IDR VariantPrice
+4. Inventory repository: create InventoryItem
+5. Inventory repository: resolve active MAIN location
+6. Inventory repository: create InventoryLevel (stocked_quantity = 0, reserved_quantity = 0)
+7. COMMIT
+```
+Return `variant_id, price_id, inventory_item_id, inventory_level_id`.
+Validation before DB mutation: `amount < 0` → `422 INVALID_PRICE_AMOUNT` (domain validation).
+Expected conflicts: Duplicate SKU → stable domain conflict (e.g., PostgreSQL `23505` mapping) instead of generic `500 DATABASE_ERROR`.
 
-- [ ] **Step 5: Implement Ops routes**
+- [ ] **Step 5: Implement Ops routes and adjust_inventory validation**
 
-POST /ops/catalog/variants calls only application::create_sellable_variant.
-POST /ops/inventory/adjustments calls only application::adjust_inventory.
-API handlers must never call Inventory/Catalog repositories directly.
+Expose `POST /ops/catalog/variants` and `POST /ops/inventory/adjustments` via `OpsCaller`. Handlers must not directly call Catalog/Pricing/Inventory mutation repositories.
+Validation before entering adjustment transaction: `delta == 0` → `422 INVALID_INVENTORY_DELTA`.
+Preserve: overflow → `INVENTORY_QUANTITY_OVERFLOW`, resulting stocked < 0 → `NEGATIVE_STOCK`.
+Audit actor_id written to inventory_adjustments must equal `OpsCaller.actor.actor_id`.
 
 - [ ] **Step 6: Verify**
 
-~~~bash
+Run tests covering: Ops auth success/failure matrix, initiator_external_ref security, `create_sellable_variant` success, negative price 422, duplicate SKU stable conflict, late Inventory failure rollback, `adjust_inventory` through Ops, `delta=0` 422, and inventory adjustment audit `actor_id` matching authenticated service Actor ID.
+```bash
 cargo test --test operations
-~~~
-
+cargo test --all
+```
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
-~~~bash
-git add src/api/ops src/application/create_sellable_variant.rs src/application/adjust_inventory.rs src/auth.rs tests/operations.rs
-git commit -m "feat: add protected commerce operations"
-~~~
+```bash
+git add src tests migrations
+git commit -m "feat: ops service authentication and variants"
+```
 
 ---
 
+### Task 5B: Registered Customer Actor provisioning
+
+**Files:**
+- Create:
+  - src/application/provision_registered_customer.rs
+  - tests/customer_provisioning.rs (or keep in tests/operations.rs if explicitly cleaner)
+- Modify:
+  - src/application/mod.rs
+  - src/actor/repository.rs
+  - src/customer/repository.rs
+  - src/api/ops/mod.rs
+  - src/api/ops/customers.rs
+
+**Interfaces:**
+- Produces: `application::provision_registered_customer(...)`
+- Input: `ProvisionRegisteredCustomerInput { auth_subject, display_name, email, phone, first_name, last_name }` (Actor.kind is always human; caller does not choose).
+- Returns: `actor`, `customer` (or their IDs).
+- Route: `POST /ops/customers` requiring `OpsCaller`.
+
+- [ ] **Step 1: Implement provision_registered_customer**
+
+Explicit sequence:
+```text
+BEGIN
+Actor repository: create Actor(kind=human)
+Customer repository: create Customer(actor_id=<new Actor>)
+COMMIT
+```
+Application layer owns the transaction. Actor repository owns Actor INSERT. Customer repository owns Customer INSERT.
+
+- [ ] **Step 2: Ops-only Route boundary**
+
+Expose via `POST /ops/customers` (requires `OpsCaller`).
+Do NOT expose `POST /store/customers` or any public Store provisioning API.
+Exclude: passwords, OAuth, JWT issuance, email verification, roles, RBAC, sessions, address creation (which remains `POST /store/me/addresses`).
+
+- [ ] **Step 3: Write atomic rollback test**
+
+Use real PostgreSQL test. Existing Customer uses `email = duplicate@example.com`. Provision request uses unique `auth_subject` but `email = duplicate@example.com`.
+Inside operation: Actor INSERT succeeds, Customer INSERT fails on email UNIQUE.
+After rollback: Verifies no new Actor exists for `auth_subject`, no new Customer exists.
+
+- [ ] **Step 4: Verify and Commit**
+
+```bash
+cargo test --test customer_provisioning
+```
+Expected: PASS.
+
+```bash
+git add src tests
+git commit -m "feat: atomic customer actor provisioning"
+```
+
+---
 ### Task 6: Cart schema, snapshots, address copy, and cart mutations
+
+*Deferred Deadline Requirement: Task 6 entry requirement is to normalize relevant Axum Path/Json request rejections into the Noko JSON error envelope before Cart expands the mutation/path API surface.*
+
 
 **Files:**
 - Create: migrations/004_cart.sql
@@ -1060,6 +1145,9 @@ git commit -m "feat: harden checkout and cancellation"
 
 ### Task 9: NocoDB PostgreSQL boundary and operator read model
 
+*Deferred Deadline Requirement: Before granting direct NocoDB UPDATE privileges, implement and verify DB-level updated_at maintenance semantics for editable rows.*
+
+
 **Files:**
 - Create: ops/sql/nocodb_grants.sql
 - Create: ops/README.md
@@ -1154,6 +1242,9 @@ git commit -m "ops: enforce nocodb database boundary"
 
 ### Task 10: Persistent architecture docs and full V1 acceptance
 
+*Deferred Deadline Requirement: Before first persistent production upgrade, verify migrations against representative already-populated prior-schema data, including pre-003 inventory_adjustments actor_id compatibility.*
+
+
 **Files:**
 - Create: docs/architecture.md
 - Create: docs/modules/catalog.md
@@ -1202,18 +1293,20 @@ Expected: PASS.
 
 Verify with real PostgreSQL:
 1. Create Product.
-2. create_sellable_variant provisions Variant + Price + InventoryItem + MAIN level.
-3. adjust_inventory to 10.
-4. Create registered Actor + Customer + address.
-5. Create/get Cart.
-6. Add quantity 2; verify reserved=0.
-7. Set shipping address.
-8. complete_cart; verify Order snapshots and reserved=2.
-9. Retry complete_cart; same Order.
-10. Cancel Order; reserved=0, stocked=10.
-11. Change stocked to 0 while a separate test reservation exceeds stock; physical adjustment is accepted but next checkout fails.
-12. Run concurrent one-unit checkout; exactly one succeeds.
-13. Change price after add-to-cart; checkout returns CART_PRICE_CHANGED.
+2. create_sellable_variant provisions: Variant + Price + InventoryItem + MAIN InventoryLevel.
+3. adjust_inventory to 10 through the protected Ops path.
+4. provision_registered_customer through Task 5B protected Ops path.
+5. Authenticate as that Customer through the configured Store adapter.
+6. POST /store/me/addresses to create saved address.
+7. Create/get Cart.
+8. Add quantity 2; verify reserved = 0.
+9. Set shipping address.
+10. complete_cart; verify snapshots and reserved = 2.
+11. Retry complete_cart; same Order.
+12. Cancel Order; reserved = 0, stocked = 10.
+13. Change stocked to 0 while a separate test reservation exceeds stock; physical adjustment is accepted but next checkout fails.
+14. Run concurrent one-unit checkout; exactly one succeeds.
+15. Change price after add-to-cart; checkout returns CART_PRICE_CHANGED.
 
 - [ ] **Step 5: Verify architecture exclusions**
 
