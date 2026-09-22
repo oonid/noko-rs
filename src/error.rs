@@ -26,6 +26,8 @@ pub enum AppError {
         message: String,
         details: Option<Value>,
     },
+    #[error("bad request: {message}")]
+    BadRequest { code: String, message: String },
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
     #[error("internal error: {0}")]
@@ -103,6 +105,13 @@ impl AppError {
         }
     }
 
+    pub fn bad_request(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::BadRequest {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
@@ -145,6 +154,9 @@ impl IntoResponse for AppError {
                 message,
                 details,
             } => (StatusCode::CONFLICT, code, message, false, details),
+            AppError::BadRequest { code, message } => {
+                (StatusCode::BAD_REQUEST, code, message, false, None)
+            }
             AppError::Database(err) => {
                 tracing::error!(error = %err, "Database error");
                 (

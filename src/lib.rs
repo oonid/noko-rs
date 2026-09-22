@@ -3,6 +3,7 @@ pub mod api;
 pub mod app;
 pub mod application;
 pub mod auth;
+pub mod cart;
 pub mod catalog;
 pub mod config;
 pub mod customer;
