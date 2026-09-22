@@ -61,10 +61,9 @@ async fn test_auth_header_inactive_actor(pool: PgPool) {
     let app = setup_test_app(pool.clone()).await;
 
     let actor_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO actors (id, kind, auth_subject, display_name, active) VALUES ($1, 'human', 'inactive_user', 'Inactive', false)",
-        actor_id
-    )
+    sqlx::query(
+        "INSERT INTO actors (id, kind, auth_subject, display_name, active) VALUES ($1, 'human', 'inactive_user', 'Inactive', false)"
+    ).bind(actor_id)
     .execute(&pool)
     .await
     .unwrap();
@@ -88,10 +87,9 @@ async fn test_auth_header_not_a_customer(pool: PgPool) {
     let app = setup_test_app(pool.clone()).await;
 
     let actor_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'service', 'service_user', 'Service')",
-        actor_id
-    )
+    sqlx::query(
+        "INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'service', 'service_user', 'Service')"
+    ).bind(actor_id)
     .execute(&pool)
     .await
     .unwrap();
@@ -116,18 +114,18 @@ async fn test_cross_customer_isolation(pool: PgPool) {
 
     // Customer A
     let actor_a = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_a', 'Customer A')", actor_a).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_a', 'Customer A')").bind(actor_a).execute(&pool).await.unwrap();
     let customer_a = Uuid::new_v4();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@example.com', 'A', 'Customer')", customer_a, actor_a).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@example.com', 'A', 'Customer')").bind(customer_a).bind(actor_a).execute(&pool).await.unwrap();
 
     // Customer B
     let actor_b = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_b', 'Customer B')", actor_b).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_b', 'Customer B')").bind(actor_b).execute(&pool).await.unwrap();
     let customer_b = Uuid::new_v4();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'b@example.com', 'B', 'Customer')", customer_b, actor_b).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'b@example.com', 'B', 'Customer')").bind(customer_b).bind(actor_b).execute(&pool).await.unwrap();
 
     // Address for A
-    sqlx::query!("INSERT INTO customer_addresses (customer_id, label, recipient_name, address_line_1, city, province, postal_code, country_code) VALUES ($1, 'Home', 'A', '123 A St', 'City', 'Prov', '12345', 'US')", customer_a).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customer_addresses (customer_id, label, recipient_name, address_line_1, city, province, postal_code, country_code) VALUES ($1, 'Home', 'A', '123 A St', 'City', 'Prov', '12345', 'US')").bind(customer_a).execute(&pool).await.unwrap();
 
     // Check A sees 1 address
     let req_a = Request::builder()
@@ -151,53 +149,49 @@ async fn test_cross_customer_isolation(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn test_inventory_adjustments_actor_id(pool: PgPool) {
     let product_id = Uuid::new_v4();
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO products (id, title, description, status) VALUES ($1, 'P1', 'p1', 'active')",
-        product_id
     )
+    .bind(product_id)
     .execute(&pool)
     .await
     .unwrap();
 
     let variant_id = Uuid::new_v4();
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'SKU1', 'V1')",
-        variant_id,
-        product_id
     )
+    .bind(variant_id)
+    .bind(product_id)
     .execute(&pool)
     .await
     .unwrap();
 
     let item_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)",
-        item_id,
-        variant_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let loc_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO inventory_locations (id, code, name) VALUES ($1, 'TEST', 'Test')",
-        loc_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO inventory_locations (id, code, name) VALUES ($1, 'TEST', 'Test')")
+        .bind(loc_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Valid NULL
-    sqlx::query!("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason) VALUES ($1, $2, 10, 'manual')", item_id, loc_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason) VALUES ($1, $2, 10, 'manual')").bind(item_id).bind(loc_id).execute(&pool).await.unwrap();
 
     // Valid Actor
     let actor_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_actor', 'Actor')", actor_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason, actor_id) VALUES ($1, $2, 10, 'manual', $3)", item_id, loc_id, actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'subject_actor', 'Actor')").bind(actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason, actor_id) VALUES ($1, $2, 10, 'manual', $3)").bind(item_id).bind(loc_id).bind(actor_id).execute(&pool).await.unwrap();
 
     // Invalid FK
     let invalid_actor = Uuid::new_v4();
-    let err = sqlx::query!("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason, actor_id) VALUES ($1, $2, 10, 'manual', $3)", item_id, loc_id, invalid_actor).execute(&pool).await.unwrap_err();
+    let err = sqlx::query("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason, actor_id) VALUES ($1, $2, 10, 'manual', $3)").bind(item_id).bind(loc_id).bind(invalid_actor).execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("inventory_adjustments_actor_fk"));
 }
