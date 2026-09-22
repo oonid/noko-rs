@@ -1118,22 +1118,35 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
     let cart_id = Uuid::new_v4();
     sqlx::query("INSERT INTO carts (id, customer_id, currency_code, status) VALUES ($1, $2, 'IDR', 'active')").bind(cart_id).bind(customer_id).execute(&pool).await.unwrap();
 
+    let p_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'Prod', 'active')").bind(p_id).execute(&pool).await.unwrap();
+    let v_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S', 'T', true)").bind(v_id).bind(p_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)").bind(v_id).execute(&pool).await.unwrap();
+
+    let loc_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM inventory_locations WHERE code = 'MAIN'").fetch_one(&pool).await.unwrap();
+    let inv_item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)").bind(inv_item_id).bind(v_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(inv_item_id).bind(loc_id).execute(&pool).await.unwrap();
+
     let mut tx_a = pool.begin().await.unwrap();
     noko_rs::cart::repository::lock_cart(&mut tx_a, cart_id, customer_id)
         .await
         .unwrap();
 
-    let mut mutation = tokio::spawn({
+    let mutation = tokio::spawn({
         let pool = pool.clone();
         async move {
-            let mut tx_b = pool.begin().await.unwrap();
-            noko_rs::cart::repository::lock_cart(&mut tx_b, cart_id, customer_id)
-                .await
-                .unwrap();
-            tx_b.commit().await.unwrap();
+            noko_rs::application::add_cart_item::execute(&pool, customer_id, cart_id, noko_rs::application::add_cart_item::AddCartItemInput {
+                variant_id: v_id,
+                quantity: 1,
+            })
+            .await
+            .unwrap();
         }
     });
 
+    let mut mutation = mutation;
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), &mut mutation)
             .await
