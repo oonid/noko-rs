@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Cart {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -13,7 +13,7 @@ pub struct Cart {
     pub completed_at: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CartItem {
     pub id: Uuid,
     pub cart_id: Uuid,
@@ -26,7 +26,7 @@ pub struct CartItem {
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CartAddress {
     pub id: Uuid,
     pub cart_id: Uuid,

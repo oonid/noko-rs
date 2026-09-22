@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO cart_items (cart_id, variant_id, variant_title, sku, quantity, unit_price) VALUES ($1, $2, 'T', 'S', 0, 1000)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a10b99446cd8bff841d8168e098ec29b57a51477bc5c1c63befa248e25928ef0"
+}

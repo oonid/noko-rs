@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_c', 'test_c')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb31dba5ed3b308244a6e1ed5823f602d2375f5e732eed5d0e56b3a4f09beb9a"
+}

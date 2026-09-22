@@ -34,7 +34,9 @@ pub async fn execute(
     }
 
     // Check inventory
-    let avail = sqlx::query!(
+    // Check inventory
+    use sqlx::Row;
+    let avail = sqlx::query(
         r#"
         SELECT l.stocked_quantity, l.reserved_quantity
         FROM inventory_items i
@@ -42,27 +44,33 @@ pub async fn execute(
         JOIN inventory_locations loc ON loc.id = l.location_id
         WHERE i.variant_id = $1 AND loc.code = 'MAIN'
         "#,
-        input.variant_id
     )
+    .bind(input.variant_id)
     .fetch_optional(&mut *conn)
     .await?;
 
     let avail_qty = avail
-        .map(|a| a.stocked_quantity - a.reserved_quantity)
+        .map(|a| {
+            let sq: i64 = a.try_get("stocked_quantity").unwrap_or(0);
+            let rq: i64 = a.try_get("reserved_quantity").unwrap_or(0);
+            sq - rq
+        })
         .unwrap_or(0);
 
     // Check existing item in cart
-    let existing = sqlx::query!(
+    let existing = sqlx::query(
         r#"
         SELECT quantity FROM cart_items WHERE cart_id = $1 AND variant_id = $2
         "#,
-        cart_id,
-        input.variant_id
     )
+    .bind(cart_id)
+    .bind(input.variant_id)
     .fetch_optional(&mut *conn)
     .await?;
 
-    let existing_qty = existing.map(|e| e.quantity).unwrap_or(0);
+    let existing_qty = existing
+        .map(|e| e.try_get::<i64, _>("quantity").unwrap_or(0))
+        .unwrap_or(0);
 
     if existing_qty + input.quantity > avail_qty {
         return Err(AppError::bad_request(

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO products (id, title, status) VALUES ($1, 'Prod', 'active')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0af68aca18d157dbb1fa12094ed71f15c51a0e139d07dae850791900684314e1"
+}

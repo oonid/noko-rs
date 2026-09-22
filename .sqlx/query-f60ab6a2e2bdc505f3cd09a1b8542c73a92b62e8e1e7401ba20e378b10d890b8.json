@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'SKU1', 'Var', true)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f60ab6a2e2bdc505f3cd09a1b8542c73a92b62e8e1e7401ba20e378b10d890b8"
+}

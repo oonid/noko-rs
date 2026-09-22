@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE customer_addresses SET recipient_name = 'Jane' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "433a579da2e7baba2a06659ee249f29db4fca58566e80e64bca074ddb92bc292"
+}

@@ -43,15 +43,14 @@ async fn get_current_cart(
     // The requirement says: GET /store/carts/current (returns active Cart or 404)
     // create_or_get_active_cart creates if not exists, but we want to just get it. Let's just create it anyway as it's active. Wait, prompt says "returns active Cart or 404".
     // I should probably query it and return 404 if not found.
-    let cart = sqlx::query_as!(
-        Cart,
+    let cart = sqlx::query_as::<_, Cart>(
         r#"
         SELECT id, customer_id, currency_code, status, created_at, updated_at, completed_at
         FROM carts
         WHERE customer_id = $1 AND status = 'active'
         "#,
-        ctx.customer_id
     )
+    .bind(ctx.customer_id)
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| AppError::not_found("CART_NOT_FOUND"))?;

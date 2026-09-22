@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO carts (id, customer_id, currency_code, status) VALUES ($1, $2, 'IDR', 'active')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07ed416897e053bc05e3293bf3f0b091f24425d15322c6faa6b3cfaedbf31cc0"
+}

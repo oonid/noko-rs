@@ -34,21 +34,21 @@ pub async fn execute(
     }
 
     // Get variant_id from item_id
-    let item_record = sqlx::query!(
-        "SELECT variant_id FROM cart_items WHERE id = $1 AND cart_id = $2",
-        item_id,
-        cart_id
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
+    use sqlx::Row;
+    let item_record =
+        sqlx::query("SELECT variant_id FROM cart_items WHERE id = $1 AND cart_id = $2")
+            .bind(item_id)
+            .bind(cart_id)
+            .fetch_optional(&mut *conn)
+            .await?;
 
     let variant_id = match item_record {
-        Some(r) => r.variant_id,
+        Some(r) => r.try_get::<Uuid, _>("variant_id").unwrap(),
         None => return Err(AppError::not_found("item_not_found")),
     };
 
     // Check inventory
-    let avail = sqlx::query!(
+    let avail = sqlx::query(
         r#"
         SELECT l.stocked_quantity, l.reserved_quantity
         FROM inventory_items i
@@ -56,13 +56,17 @@ pub async fn execute(
         JOIN inventory_locations loc ON loc.id = l.location_id
         WHERE i.variant_id = $1 AND loc.code = 'MAIN'
         "#,
-        variant_id
     )
+    .bind(variant_id)
     .fetch_optional(&mut *conn)
     .await?;
 
     let avail_qty = avail
-        .map(|a| a.stocked_quantity - a.reserved_quantity)
+        .map(|a| {
+            let sq: i64 = a.try_get("stocked_quantity").unwrap_or(0);
+            let rq: i64 = a.try_get("reserved_quantity").unwrap_or(0);
+            sq - rq
+        })
         .unwrap_or(0);
 
     if input.quantity > avail_qty {
