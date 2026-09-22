@@ -528,3 +528,27 @@ async fn store_products_http_reads(pool: PgPool) -> Result<(), Box<dyn std::erro
 
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_public_catalog_no_auth(pool: sqlx::PgPool) {
+    let config = std::sync::Arc::new(noko_rs::config::Config {
+        database_url: std::env::var("DATABASE_URL").unwrap(),
+        bind_addr: "127.0.0.1:0".to_string(),
+        auth_mode: "dev_header".to_string(),
+        nocodb_service_token: None,
+        nocodb_service_actor_id: None,
+        db_tx_max_retries: 2,
+    });
+    let app = noko_rs::app::build_router(noko_rs::app::AppState {
+        pool: pool.clone(),
+        config,
+    });
+
+    let req = axum::http::Request::builder()
+        .uri("/store/products")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let res = tower::ServiceExt::oneshot(app, req).await.unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}

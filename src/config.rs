@@ -9,7 +9,7 @@ pub enum ConfigError {
     Invalid(String, String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
     pub bind_addr: String,
@@ -72,5 +72,81 @@ impl Config {
             nocodb_service_actor_id,
             db_tx_max_retries,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        old_db_url: Result<String, env::VarError>,
+        old_auth_mode: Result<String, env::VarError>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Ok(v) = &self.old_db_url {
+                    env::set_var("DATABASE_URL", v);
+                } else {
+                    env::remove_var("DATABASE_URL");
+                }
+                if let Ok(v) = &self.old_auth_mode {
+                    env::set_var("AUTH_MODE", v);
+                } else {
+                    env::remove_var("AUTH_MODE");
+                }
+            }
+        }
+    }
+
+    fn setup_env() -> EnvGuard {
+        let guard = match ENV_MUTEX.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+        unsafe { env::set_var("DATABASE_URL", "postgres://test") };
+        let old_db_url = env::var("DATABASE_URL");
+        let old_auth_mode = env::var("AUTH_MODE");
+        
+        EnvGuard {
+            _guard: guard,
+            old_db_url,
+            old_auth_mode,
+        }
+    }
+
+    #[test]
+    fn test_auth_mode_absent() {
+        let _guard = setup_env();
+        unsafe { env::remove_var("AUTH_MODE") };
+        let err = Config::from_env().unwrap_err();
+        assert_eq!(err.to_string(), "missing environment variable: AUTH_MODE");
+    }
+
+    #[test]
+    fn test_auth_mode_dev() {
+        let _guard = setup_env();
+        unsafe { env::set_var("AUTH_MODE", "dev") };
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(key, _) if key == "AUTH_MODE"));
+    }
+
+    #[test]
+    fn test_auth_mode_unsupported() {
+        let _guard = setup_env();
+        unsafe { env::set_var("AUTH_MODE", "unsupported") };
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(key, _) if key == "AUTH_MODE"));
+    }
+
+    #[test]
+    fn test_auth_mode_dev_header() {
+        let _guard = setup_env();
+        unsafe { env::set_var("AUTH_MODE", "dev_header") };
+        let config = Config::from_env().unwrap();
+        assert_eq!(config.auth_mode, "dev_header");
     }
 }
