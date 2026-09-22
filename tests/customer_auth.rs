@@ -172,6 +172,13 @@ async fn test_cross_customer_isolation(pool: PgPool) {
     assert_eq!(addrs_a.len(), 1);
     assert_eq!(addrs_a[0]["id"].as_str().unwrap(), address_a_id.to_string());
 
+    let created_at = addrs_a[0]["created_at"].as_str().unwrap();
+    let updated_at = addrs_a[0]["updated_at"].as_str().unwrap();
+    time::OffsetDateTime::parse(created_at, &time::format_description::well_known::Rfc3339)
+        .unwrap();
+    time::OffsetDateTime::parse(updated_at, &time::format_description::well_known::Rfc3339)
+        .unwrap();
+
     // Check B sees Address B, not A
     let req_b = Request::builder()
         .uri("/store/me/addresses")
@@ -264,6 +271,13 @@ async fn test_get_store_me_positive(pool: PgPool) {
     assert_eq!(json["id"].as_str().unwrap(), customer_a.to_string());
     assert_eq!(json["actor_id"].as_str().unwrap(), actor_a.to_string());
     assert_eq!(json["email"].as_str().unwrap(), "a@example.com");
+
+    let created_at = json["created_at"].as_str().unwrap();
+    let updated_at = json["updated_at"].as_str().unwrap();
+    time::OffsetDateTime::parse(created_at, &time::format_description::well_known::Rfc3339)
+        .unwrap();
+    time::OffsetDateTime::parse(updated_at, &time::format_description::well_known::Rfc3339)
+        .unwrap();
 }
 
 #[sqlx::test(migrations = "./migrations")]

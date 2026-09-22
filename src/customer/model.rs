@@ -10,7 +10,9 @@ pub struct Customer {
     pub phone: Option<String>,
     pub first_name: String,
     pub last_name: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -28,7 +30,9 @@ pub struct CustomerAddress {
     pub postal_code: String,
     pub country_code: String,
     pub is_default: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 

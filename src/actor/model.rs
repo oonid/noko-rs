@@ -17,5 +17,6 @@ pub struct Actor {
     pub auth_subject: String,
     pub display_name: String,
     pub active: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }

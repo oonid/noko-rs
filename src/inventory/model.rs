@@ -9,7 +9,9 @@ pub struct InventoryLocation {
     pub code: String,
     pub name: String,
     pub active: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -17,6 +19,7 @@ pub struct InventoryLocation {
 pub struct InventoryItem {
     pub id: Uuid,
     pub variant_id: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -27,7 +30,9 @@ pub struct InventoryLevel {
     pub location_id: Uuid,
     pub stocked_quantity: i64,
     pub reserved_quantity: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -40,6 +45,7 @@ pub struct InventoryAdjustment {
     pub reason: String,
     pub note: Option<String>,
     pub actor_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
