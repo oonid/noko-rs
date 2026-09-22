@@ -18,8 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = db::create_pool(&config.database_url).await?;
     tracing::info!("Running database migrations...");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
+    db::run_migrations(&pool)
         .await
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     let bind_addr = config.bind_addr.clone();
