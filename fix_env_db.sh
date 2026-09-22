@@ -1,1 +1,0 @@
-sed -i 's/let guard = match ENV_MUTEX.lock() { Ok(g) => g, Err(p) => p.into_inner() };/let guard = match ENV_MUTEX.lock() { Ok(g) => g, Err(p) => p.into_inner() };\n        unsafe { env::set_var("DATABASE_URL", "postgres:\/\/test") };/g' src/config.rs
