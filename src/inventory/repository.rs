@@ -141,7 +141,7 @@ pub async fn find_main_location(conn: &mut PgConnection) -> Result<Uuid, AppErro
     )
     .fetch_optional(&mut *conn)
     .await?
-    .ok_or_else(|| AppError::not_found("LOCATION_NOT_FOUND"))?; 
+    .ok_or_else(|| AppError::not_found("LOCATION_NOT_FOUND"))?;
     Ok(id)
 }
 

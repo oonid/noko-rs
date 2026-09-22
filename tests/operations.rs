@@ -447,4 +447,3 @@ async fn test_create_variant_duplicate_sku() {
     let res2 = app.oneshot(req2).await.unwrap();
     assert_eq!(res2.status(), StatusCode::CONFLICT); // 409
 }
-
