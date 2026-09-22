@@ -43,6 +43,38 @@ async fn test_run_migrations_conflict(pool: PgPool) {
     assert!(err.is_err(), "migration should fail due to conflict");
 }
 
+struct DbDropGuard {
+    base_url: String,
+    db_name: String,
+}
+
+impl Drop for DbDropGuard {
+    fn drop(&mut self) {
+        let base_url = self.base_url.clone();
+        let db_name = self.db_name.clone();
+        std::thread::spawn(move || {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                rt.block_on(async {
+                    use sqlx::Connection;
+                    if let Ok(mut conn) = sqlx::PgConnection::connect(&base_url).await {
+                        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+                            "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+                            db_name
+                        )))
+                        .execute(&mut conn)
+                        .await;
+                    }
+                });
+            }
+        })
+        .join()
+        .ok();
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::zombie_processes)]
 async fn test_runtime_migration_failure_prevents_listener() {
@@ -55,8 +87,19 @@ async fn test_runtime_migration_failure_prevents_listener() {
     let mut conn = PgConnection::connect(&base_url).await.unwrap();
 
     let db_name = format!("test_conflict_{}", Uuid::new_v4().simple());
-    let query: &'static str = Box::leak(format!("CREATE DATABASE {}", db_name).into_boxed_str());
-    conn.execute(query).await.unwrap();
+
+    let _guard = DbDropGuard {
+        base_url: base_url.clone(),
+        db_name: db_name.clone(),
+    };
+
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE DATABASE \"{}\"",
+        db_name
+    )))
+    .execute(&mut conn)
+    .await
+    .unwrap();
 
     // construct new url
     // Assumes DATABASE_URL format is postgres://user:pass@host:port/dbname
@@ -100,18 +143,13 @@ async fn test_runtime_migration_failure_prevents_listener() {
     if !exited {
         child.kill().unwrap();
         child.wait().unwrap(); // fix zombie process clippy warning
-
-        drop(new_conn);
-        let drop_query: &'static str =
-            Box::leak(format!("DROP DATABASE {}", db_name).into_boxed_str());
-        conn.execute(drop_query).await.unwrap();
-
+        drop(new_conn); // ensure lock is released before drop guard runs on panic
         panic!("Binary did not exit fast enough on migration failure");
     }
 
+    // drop connection so DropGuard can drop the database cleanly (WITH FORCE also helps)
     drop(new_conn);
-    let drop_query: &'static str = Box::leak(format!("DROP DATABASE {}", db_name).into_boxed_str());
-    conn.execute(drop_query).await.unwrap();
+    drop(conn);
 
     assert!(
         !status.unwrap().success(),
