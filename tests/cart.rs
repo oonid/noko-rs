@@ -1143,11 +1143,10 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
 
     tx_a.commit().await.unwrap();
 
-    let result = tokio::time::timeout(std::time::Duration::from_millis(500), mutation)
+    tokio::time::timeout(std::time::Duration::from_millis(500), mutation)
         .await
         .expect("task should not time out")
         .expect("task should not panic");
-    assert_eq!(result, ());
 }
 
 #[sqlx::test(migrations = "./migrations")]
