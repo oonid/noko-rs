@@ -291,7 +291,11 @@ async fn test_adjust_inventory_zero_delta() {
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
     let pool = noko_rs::db::create_pool(&db_url).await.unwrap();
+    noko_rs::db::run_migrations(&pool).await.unwrap();
+
     let actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'service', $2, true, 'srv') ON CONFLICT (id) DO NOTHING").bind(actor_id).bind(format!("sub_{}", actor_id)).execute(&pool).await.unwrap();
+
     let app = setup_app(pool.clone(), actor_id, "test_token").await;
 
     let payload = json!({
