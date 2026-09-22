@@ -112,6 +112,7 @@ async fn test_ops_authentication_failures() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "AUTH_REQUIRED");
+    assert_eq!(body["retryable"], false);
 
     // Wrong token
     let req = Request::builder()
@@ -128,6 +129,7 @@ async fn test_ops_authentication_failures() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "INVALID_TOKEN");
+    assert_eq!(body["retryable"], false);
 }
 
 #[tokio::test]
@@ -350,6 +352,13 @@ async fn test_adjust_inventory_zero_delta() {
 
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY); // 422
+
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["code"], "INVALID_INVENTORY_DELTA");
+    assert_eq!(body["retryable"], false);
 }
 
 #[tokio::test]
@@ -377,6 +386,7 @@ async fn test_ops_authentication_missing_or_invalid_actor() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "SERVICE_ACTOR_NOT_FOUND");
+    assert_eq!(body["retryable"], false);
 
     let inactive_actor_id = Uuid::new_v4();
     sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'service', $2, false, 'inactive')").bind(inactive_actor_id).bind(format!("sub_{}", inactive_actor_id)).execute(&pool).await.unwrap();
@@ -395,6 +405,7 @@ async fn test_ops_authentication_missing_or_invalid_actor() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "ACTOR_INACTIVE");
+    assert_eq!(body["retryable"], false);
 
     let human_actor_id = Uuid::new_v4();
     sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'human', $2, true, 'human')").bind(human_actor_id).bind(format!("sub_{}", human_actor_id)).execute(&pool).await.unwrap();
@@ -413,6 +424,7 @@ async fn test_ops_authentication_missing_or_invalid_actor() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "ACTOR_NOT_SERVICE");
+    assert_eq!(body["retryable"], false);
 
     let agent_actor_id = Uuid::new_v4();
     sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'agent', $2, true, 'agent')").bind(agent_actor_id).bind(format!("sub_{}", agent_actor_id)).execute(&pool).await.unwrap();
@@ -431,6 +443,7 @@ async fn test_ops_authentication_missing_or_invalid_actor() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "ACTOR_NOT_SERVICE");
+    assert_eq!(body["retryable"], false);
 }
 
 #[tokio::test]
@@ -463,6 +476,13 @@ async fn test_create_variant_negative_price() {
 
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY); // 422
+
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["code"], "INVALID_PRICE_AMOUNT");
+    assert_eq!(body["retryable"], false);
 }
 
 #[tokio::test]
@@ -556,6 +576,23 @@ async fn test_create_variant_main_inactive() {
         "amount": 100
     });
 
+    let c_variants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM product_variants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let c_prices: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM variant_prices")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let c_items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let c_levels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_levels")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
     let req = Request::builder()
         .method("POST")
         .uri("/ops/catalog/variants")
@@ -572,6 +609,29 @@ async fn test_create_variant_main_inactive() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["code"], "LOCATION_NOT_FOUND");
+    assert_eq!(body["retryable"], false);
+
+    let a_variants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM product_variants")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let a_prices: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM variant_prices")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let a_items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let a_levels: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inventory_levels")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(c_variants, a_variants);
+    assert_eq!(c_prices, a_prices);
+    assert_eq!(c_items, a_items);
+    assert_eq!(c_levels, a_levels);
 
     sqlx::query("UPDATE inventory_locations SET active = true WHERE code = 'MAIN'")
         .execute(&pool)
