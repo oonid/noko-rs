@@ -37,12 +37,11 @@ pub async fn create_sellable_variant(
         &input.title,
     )
     .await
-    .map_err(|e| {
-        if e.to_string().contains("23505") {
+                .map_err(|e| match &e {
+        AppError::Database(db_err) if db_err.as_database_error().and_then(|err| err.code()).as_deref() == Some("23505") => {
             AppError::conflict("SKU_ALREADY_EXISTS")
-        } else {
-            e
         }
+        _ => e,
     })?;
 
     let price_id =

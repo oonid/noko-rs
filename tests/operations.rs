@@ -85,10 +85,6 @@ async fn test_create_variant_success() {
 
     let res = app.oneshot(req).await.unwrap();
     let status = res.status();
-    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    println!("BODY: {:?}", body);
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -316,3 +312,139 @@ async fn test_adjust_inventory_zero_delta() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY); // 422
 }
+
+#[tokio::test]
+async fn test_ops_authentication_missing_or_invalid_actor() {
+    let _guard = EnvGuard::acquire().await;
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
+    let pool = noko_rs::db::create_pool(&db_url).await.unwrap();
+    noko_rs::db::run_migrations(&pool).await.unwrap();
+
+    let missing_actor_id = Uuid::new_v4();
+    let app_missing = setup_app(pool.clone(), missing_actor_id, "test_token").await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = app_missing.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let inactive_actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'service', $2, false, 'inactive')").bind(inactive_actor_id).bind(format!("sub_{}", inactive_actor_id)).execute(&pool).await.unwrap();
+    let app_inactive = setup_app(pool.clone(), inactive_actor_id, "test_token").await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = app_inactive.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let human_actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'human', $2, true, 'human')").bind(human_actor_id).bind(format!("sub_{}", human_actor_id)).execute(&pool).await.unwrap();
+    let app_human = setup_app(pool.clone(), human_actor_id, "test_token").await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = app_human.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_create_variant_negative_price() {
+    let _guard = EnvGuard::acquire().await;
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
+    let pool = noko_rs::db::create_pool(&db_url).await.unwrap();
+    noko_rs::db::run_migrations(&pool).await.unwrap();
+
+    let actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'service', $2, true, 'srv') ON CONFLICT (id) DO NOTHING").bind(actor_id).bind(format!("sub_{}", actor_id)).execute(&pool).await.unwrap();
+
+    let app = setup_app(pool.clone(), actor_id, "test_token").await;
+
+    let payload = json!({
+        "product_id": Uuid::new_v4(),
+        "sku": "SKU_NEG_PRICE",
+        "title": "Test Variant",
+        "amount": -100
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY); // 422
+}
+
+#[tokio::test]
+async fn test_create_variant_duplicate_sku() {
+    let _guard = EnvGuard::acquire().await;
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test".to_string());
+    let pool = noko_rs::db::create_pool(&db_url).await.unwrap();
+    noko_rs::db::run_migrations(&pool).await.unwrap();
+
+    let actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, active, display_name) VALUES ($1, 'service', $2, true, 'srv') ON CONFLICT (id) DO NOTHING").bind(actor_id).bind(format!("sub_{}", actor_id)).execute(&pool).await.unwrap();
+
+    let product_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'test product', 'active')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let location_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_locations (id, code, name, active) VALUES ($1, 'MAIN', 'Main', true) ON CONFLICT (code) DO NOTHING").bind(location_id).execute(&pool).await.unwrap();
+
+    let sku = format!("SKU_DUP_{}", Uuid::new_v4());
+
+    let app = setup_app(pool.clone(), actor_id, "test_token").await;
+
+    let payload = json!({
+        "product_id": product_id,
+        "sku": sku,
+        "title": "Test Variant",
+        "amount": 100
+    });
+
+    // First request should succeed
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res1 = app.clone().oneshot(req1).await.unwrap();
+    assert_eq!(res1.status(), StatusCode::OK);
+
+    // Second request with same SKU should fail with 409
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/ops/catalog/variants")
+        .header("authorization", "Bearer test_token")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res2 = app.oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::CONFLICT); // 409
+}
+

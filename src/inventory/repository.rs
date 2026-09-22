@@ -136,12 +136,12 @@ pub async fn create_item(
 pub async fn find_main_location(conn: &mut PgConnection) -> Result<Uuid, AppError> {
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT id FROM inventory_locations LIMIT 1
+        SELECT id FROM inventory_locations WHERE code = 'MAIN' LIMIT 1
         "#,
     )
     .fetch_optional(&mut *conn)
     .await?
-    .ok_or_else(|| AppError::not_found("LOCATION_NOT_FOUND"))?; // fallback if no locations exist in test? Or maybe it errors?
+    .ok_or_else(|| AppError::not_found("LOCATION_NOT_FOUND"))?; 
     Ok(id)
 }
 
