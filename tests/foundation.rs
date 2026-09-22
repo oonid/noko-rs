@@ -62,7 +62,7 @@ async fn config_loads_defaults_and_env_vars() {
             "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test",
         );
         std::env::remove_var("BIND_ADDR");
-        std::env::remove_var("AUTH_MODE");
+        std::env::set_var("AUTH_MODE", "dev_header");
         std::env::remove_var("NOCODB_SERVICE_TOKEN");
         std::env::remove_var("NOCODB_SERVICE_ACTOR_ID");
         std::env::remove_var("DB_TX_MAX_RETRIES");
@@ -74,7 +74,7 @@ async fn config_loads_defaults_and_env_vars() {
         "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test"
     );
     assert_eq!(config.bind_addr, "0.0.0.0:3000");
-    assert_eq!(config.auth_mode, "dev");
+    assert_eq!(config.auth_mode, "dev_header");
     assert_eq!(config.nocodb_service_token, None);
     assert_eq!(config.nocodb_service_actor_id, None);
     assert_eq!(config.db_tx_max_retries, 2);
@@ -123,6 +123,7 @@ async fn config_db_tx_max_retries() {
             "DATABASE_URL",
             "postgres://noko_test:noko_test@127.0.0.1:5432/noko_test",
         );
+        std::env::set_var("AUTH_MODE", "dev_header");
     }
 
     // unset -> 2
@@ -276,6 +277,7 @@ async fn binary_starts_and_gracefully_shuts_down() {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("DATABASE_URL", &db_url)
+        .env("AUTH_MODE", "dev_header")
         .env("BIND_ADDR", "127.0.0.1:39123")
         .spawn()
         .expect("start binary");

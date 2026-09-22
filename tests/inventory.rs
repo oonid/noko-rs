@@ -303,6 +303,8 @@ async fn test_adjustment_audit(pool: PgPool) {
         .bind(level_id).bind(item_id).bind(location_id).execute(&pool).await.unwrap();
 
     let actor_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'audit_actor', 'Audit Actor')")
+        .bind(actor_id).execute(&pool).await.unwrap();
 
     // Success audit
     adjust_inventory(

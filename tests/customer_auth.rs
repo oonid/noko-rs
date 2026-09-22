@@ -151,16 +151,42 @@ async fn test_cross_customer_isolation(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn test_inventory_adjustments_actor_id(pool: PgPool) {
     let product_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO products (id, title, description, status) VALUES ($1, 'P1', 'p1', 'active')", product_id).execute(&pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO products (id, title, description, status) VALUES ($1, 'P1', 'p1', 'active')",
+        product_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let variant_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'SKU1', 'V1')", variant_id, product_id).execute(&pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'SKU1', 'V1')",
+        variant_id,
+        product_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let item_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)", item_id, variant_id).execute(&pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)",
+        item_id,
+        variant_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let loc_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO inventory_locations (id, code, name) VALUES ($1, 'TEST', 'Test')", loc_id).execute(&pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO inventory_locations (id, code, name) VALUES ($1, 'TEST', 'Test')",
+        loc_id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     // Valid NULL
     sqlx::query!("INSERT INTO inventory_adjustments (inventory_item_id, location_id, delta, reason) VALUES ($1, $2, 10, 'manual')", item_id, loc_id).execute(&pool).await.unwrap();
