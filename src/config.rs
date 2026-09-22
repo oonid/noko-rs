@@ -9,7 +9,7 @@ pub enum ConfigError {
     Invalid(String, String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub database_url: String,
     pub bind_addr: String,
@@ -125,7 +125,10 @@ mod tests {
     fn test_auth_mode_absent() {
         let _guard = setup_env();
         unsafe { env::remove_var("AUTH_MODE") };
-        let err = Config::from_env().unwrap_err();
+        let err = match Config::from_env() {
+            Ok(_) => panic!("configuration should be rejected"),
+            Err(e) => e,
+        };
         assert_eq!(err.to_string(), "missing environment variable: AUTH_MODE");
     }
 
@@ -133,7 +136,10 @@ mod tests {
     fn test_auth_mode_dev() {
         let _guard = setup_env();
         unsafe { env::set_var("AUTH_MODE", "dev") };
-        let err = Config::from_env().unwrap_err();
+        let err = match Config::from_env() {
+            Ok(_) => panic!("configuration should be rejected"),
+            Err(e) => e,
+        };
         assert!(matches!(err, ConfigError::Invalid(key, _) if key == "AUTH_MODE"));
     }
 
@@ -141,7 +147,10 @@ mod tests {
     fn test_auth_mode_unsupported() {
         let _guard = setup_env();
         unsafe { env::set_var("AUTH_MODE", "unsupported") };
-        let err = Config::from_env().unwrap_err();
+        let err = match Config::from_env() {
+            Ok(_) => panic!("configuration should be rejected"),
+            Err(e) => e,
+        };
         assert!(matches!(err, ConfigError::Invalid(key, _) if key == "AUTH_MODE"));
     }
 
@@ -149,7 +158,10 @@ mod tests {
     fn test_auth_mode_dev_header() {
         let _guard = setup_env();
         unsafe { env::set_var("AUTH_MODE", "dev_header") };
-        let config = Config::from_env().unwrap();
+        let config = match Config::from_env() {
+            Ok(c) => c,
+            Err(e) => panic!("configuration failed: {}", e),
+        };
         assert_eq!(config.auth_mode, "dev_header");
     }
 }
