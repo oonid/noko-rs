@@ -30,25 +30,23 @@ async fn test_cart_full_workflow(pool: PgPool) {
 
     // Create an actor and customer
     let actor_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth1', 'test')", actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth1', 'test')").bind(actor_id).execute(&pool).await.unwrap();
     let customer_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@b.com', 'A', 'B')", customer_id, actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@b.com', 'A', 'B')").bind(customer_id).bind(actor_id).execute(&pool).await.unwrap();
 
     // Create a product, variant and price
     let product_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO products (id, title, status) VALUES ($1, 'Prod', 'active')",
-        product_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'Prod', 'active')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let variant_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'SKU1', 'Var', true)", variant_id, product_id).execute(&pool).await.unwrap();
-    sqlx::query!(
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'SKU1', 'Var', true)").bind(variant_id).bind(product_id).execute(&pool).await.unwrap();
+    sqlx::query(
         "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
-        variant_id
     )
+    .bind(variant_id)
     .execute(&pool)
     .await
     .unwrap();
@@ -60,15 +58,13 @@ async fn test_cart_full_workflow(pool: PgPool) {
             .await
             .unwrap();
     let inv_item_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)",
-        inv_item_id,
-        variant_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query!("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)", inv_item_id, loc_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(inv_item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(inv_item_id).bind(loc_id).execute(&pool).await.unwrap();
 
     // 1. Create cart
     let req = Request::builder()
@@ -144,9 +140,9 @@ async fn test_rejection_normalization(pool: PgPool) {
 
     // Create an actor and customer
     let actor_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth2', 'test2')", actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth2', 'test2')").bind(actor_id).execute(&pool).await.unwrap();
     let customer_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a2@b.com', 'A', 'B')", customer_id, actor_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a2@b.com', 'A', 'B')").bind(customer_id).bind(actor_id).execute(&pool).await.unwrap();
 
     let req = Request::builder()
         .method("POST")
@@ -205,42 +201,40 @@ async fn test_rejection_normalization(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn test_migration_constraints(pool: PgPool) {
     let customer_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth3', 'test3')", customer_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a3@b.com', 'A', 'B')", customer_id, customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth3', 'test3')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a3@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
 
     // Test invalid currency code
-    let res = sqlx::query!(
+    let res = sqlx::query(
         "INSERT INTO carts (customer_id, currency_code, status) VALUES ($1, 'USD', 'active')",
-        customer_id
     )
+    .bind(customer_id)
     .execute(&pool)
     .await;
     assert!(res.is_err());
 
     // Test invalid status
-    let res = sqlx::query!(
+    let res = sqlx::query(
         "INSERT INTO carts (customer_id, currency_code, status) VALUES ($1, 'IDR', 'pending')",
-        customer_id
     )
+    .bind(customer_id)
     .execute(&pool)
     .await;
     assert!(res.is_err());
 
     let cart_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO carts (id, customer_id, currency_code, status) VALUES ($1, $2, 'IDR', 'active')", cart_id, customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO carts (id, customer_id, currency_code, status) VALUES ($1, $2, 'IDR', 'active')").bind(cart_id).bind(customer_id).execute(&pool).await.unwrap();
 
     // Test quantity <= 0
-    let res = sqlx::query!(
-        "INSERT INTO cart_items (cart_id, variant_id, variant_title, sku, quantity, unit_price) VALUES ($1, $2, 'T', 'S', 0, 1000)",
-        cart_id, Uuid::new_v4()
-    ).execute(&pool).await;
+    let res = sqlx::query(
+        "INSERT INTO cart_items (cart_id, variant_id, variant_title, sku, quantity, unit_price) VALUES ($1, $2, 'T', 'S', 0, 1000)"
+    ).bind(cart_id).bind(Uuid::new_v4()).execute(&pool).await;
     assert!(res.is_err());
 
     // Test unit_price < 0
-    let res = sqlx::query!(
-        "INSERT INTO cart_items (cart_id, variant_id, variant_title, sku, quantity, unit_price) VALUES ($1, $2, 'T', 'S', 1, -100)",
-        cart_id, Uuid::new_v4()
-    ).execute(&pool).await;
+    let res = sqlx::query(
+        "INSERT INTO cart_items (cart_id, variant_id, variant_title, sku, quantity, unit_price) VALUES ($1, $2, 'T', 'S', 1, -100)"
+    ).bind(cart_id).bind(Uuid::new_v4()).execute(&pool).await;
     assert!(res.is_err());
 }
 
@@ -250,8 +244,8 @@ async fn test_concurrency_create_active_cart(pool: PgPool) {
     use std::sync::Arc;
 
     let customer_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth4', 'test4')", customer_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a4@b.com', 'A', 'B')", customer_id, customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth4', 'test4')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a4@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
 
     let pool_arc = Arc::new(pool.clone());
     let mut handles = vec![];
@@ -283,13 +277,13 @@ async fn test_cart_ownership_403(pool: PgPool) {
 
     // Customer A
     let a_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_a', 'test_a')", a_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@b.com', 'A', 'B')", a_id, a_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_a', 'test_a')").bind(a_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'a@b.com', 'A', 'B')").bind(a_id).bind(a_id).execute(&pool).await.unwrap();
 
     // Customer B
     let b_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_b', 'test_b')", b_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'b@b.com', 'A', 'B')", b_id, b_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_b', 'test_b')").bind(b_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'b@b.com', 'A', 'B')").bind(b_id).bind(b_id).execute(&pool).await.unwrap();
 
     // Create cart for B
     let req = Request::builder()
@@ -331,8 +325,8 @@ async fn test_completed_cart_mutation_409(pool: PgPool) {
     let app = setup_test_app(pool.clone()).await;
 
     let c_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_c', 'test_c')", c_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'c@b.com', 'C', 'D')", c_id, c_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_c', 'test_c')").bind(c_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'c@b.com', 'C', 'D')").bind(c_id).bind(c_id).execute(&pool).await.unwrap();
 
     // Create cart
     let req = Request::builder()
@@ -356,13 +350,11 @@ async fn test_completed_cart_mutation_409(pool: PgPool) {
 
     // Complete cart manually
     let parsed_id = Uuid::parse_str(cart_id).unwrap();
-    sqlx::query!(
-        "UPDATE carts SET status = 'completed' WHERE id = $1",
-        parsed_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE carts SET status = 'completed' WHERE id = $1")
+        .bind(parsed_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Try to mutate
     let req = Request::builder()
@@ -389,15 +381,14 @@ async fn test_shipping_address_copy_proof(pool: PgPool) {
     let app = setup_test_app(pool.clone()).await;
 
     let c_id = Uuid::new_v4();
-    sqlx::query!("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_d', 'test_d')", c_id).execute(&pool).await.unwrap();
-    sqlx::query!("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'd@b.com', 'D', 'E')", c_id, c_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_d', 'test_d')").bind(c_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'd@b.com', 'D', 'E')").bind(c_id).bind(c_id).execute(&pool).await.unwrap();
 
     // Create customer address
     let ca_id = Uuid::new_v4();
-    sqlx::query!(
-        "INSERT INTO customer_addresses (id, customer_id, label, recipient_name, phone, address_line_1, city, province, postal_code, country_code, is_default) VALUES ($1, $2, 'Home', 'John', '12345', 'Street 1', 'City', 'Prov', '12345', 'ID', true)",
-        ca_id, c_id
-    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO customer_addresses (id, customer_id, label, recipient_name, phone, address_line_1, city, province, postal_code, country_code, is_default) VALUES ($1, $2, 'Home', 'John', '12345', 'Street 1', 'City', 'Prov', '12345', 'ID', true)"
+    ).bind(ca_id).bind(c_id).execute(&pool).await.unwrap();
 
     // Create cart
     let req = Request::builder()
@@ -434,22 +425,19 @@ async fn test_shipping_address_copy_proof(pool: PgPool) {
     assert_eq!(res.status(), StatusCode::OK);
 
     // Modify customer address
-    sqlx::query!(
-        "UPDATE customer_addresses SET recipient_name = 'Jane' WHERE id = $1",
-        ca_id
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE customer_addresses SET recipient_name = 'Jane' WHERE id = $1")
+        .bind(ca_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Fetch cart address
     let parsed_id = Uuid::parse_str(cart_id).unwrap();
-    let addr = sqlx::query!(
-        "SELECT recipient_name FROM cart_addresses WHERE cart_id = $1",
-        parsed_id
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(addr.recipient_name, "John");
+    let addr_name: String =
+        sqlx::query_scalar("SELECT recipient_name FROM cart_addresses WHERE cart_id = $1")
+            .bind(parsed_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(addr_name, "John");
 }
