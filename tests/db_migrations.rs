@@ -6,9 +6,30 @@ async fn test_run_migrations_fresh_db(pool: PgPool) {
     db::run_migrations(&pool)
         .await
         .expect("initial migration should succeed");
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 1,
+        "MAIN location should be created after first migration"
+    );
+
     db::run_migrations(&pool)
         .await
         .expect("repeated migration should be a no-op and succeed");
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 1,
+        "MAIN location should still be exactly 1 after repeated migration"
+    );
 }
 
 #[sqlx::test(migrations = false)]
@@ -48,12 +69,16 @@ async fn test_runtime_migration_failure_prevents_listener() {
         .await
         .unwrap();
 
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind_addr = listener.local_addr().unwrap().to_string();
+    drop(listener); // free the port for the binary to use
+
     // start binary
     let bin_path = env!("CARGO_BIN_EXE_noko-rs");
 
     let mut child = Command::new(bin_path)
         .env("DATABASE_URL", &new_url)
-        .env("PORT", "0") // Random port
+        .env("BIND_ADDR", &bind_addr)
         .spawn()
         .unwrap();
 
@@ -75,11 +100,27 @@ async fn test_runtime_migration_failure_prevents_listener() {
     if !exited {
         child.kill().unwrap();
         child.wait().unwrap(); // fix zombie process clippy warning
+
+        drop(new_conn);
+        let drop_query: &'static str =
+            Box::leak(format!("DROP DATABASE {}", db_name).into_boxed_str());
+        conn.execute(drop_query).await.unwrap();
+
         panic!("Binary did not exit fast enough on migration failure");
     }
+
+    drop(new_conn);
+    let drop_query: &'static str = Box::leak(format!("DROP DATABASE {}", db_name).into_boxed_str());
+    conn.execute(drop_query).await.unwrap();
 
     assert!(
         !status.unwrap().success(),
         "Binary should exit with non-zero status on migration failure"
+    );
+
+    let stream = std::net::TcpStream::connect(&bind_addr);
+    assert!(
+        stream.is_err(),
+        "Should not be able to connect to the listener port"
     );
 }
