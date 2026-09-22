@@ -288,7 +288,8 @@ async fn test_post_store_me_addresses_ownership(pool: PgPool) {
         "city": "City",
         "province": "Prov",
         "postal_code": "12345",
-        "country_code": "US"
+        "country_code": "US",
+        "is_default": false
     });
 
     let req = Request::builder()
@@ -328,7 +329,8 @@ async fn test_post_store_me_addresses_ownership(pool: PgPool) {
         "city": "City",
         "province": "Prov",
         "postal_code": "12345",
-        "country_code": "US"
+        "country_code": "US",
+        "is_default": false
     });
 
     let req = Request::builder()
