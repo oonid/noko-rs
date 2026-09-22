@@ -177,6 +177,8 @@ async fn test_rejection_normalization(pool: PgPool) {
         .await
         .unwrap();
     let err_body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err_body["code"], "INVALID_JSON");
+    assert_eq!(err_body["message"], "Invalid JSON request body");
     assert_eq!(err_body["retryable"], false);
 
     // 2. Malformed UUID in path
@@ -195,6 +197,8 @@ async fn test_rejection_normalization(pool: PgPool) {
         .await
         .unwrap();
     let err_body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err_body["code"], "INVALID_PATH");
+    assert_eq!(err_body["message"], "Invalid path parameter");
     assert_eq!(err_body["retryable"], false);
 }
 
@@ -374,6 +378,7 @@ async fn test_completed_cart_mutation_409(pool: PgPool) {
         .unwrap();
     let err_body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(err_body["code"], "CART_COMPLETED");
+    assert_eq!(err_body["retryable"], false);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -970,6 +975,12 @@ async fn test_patch_quantity(pool: PgPool) {
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let err: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err["code"], "INVALID_QUANTITY");
+    assert_eq!(err["retryable"], false);
 
     // Invalid item_id from another cart
     let req = Request::builder()
@@ -986,6 +997,7 @@ async fn test_patch_quantity(pool: PgPool) {
         .unwrap();
     let err: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(err["code"], "CART_ITEM_NOT_FOUND");
+    assert_eq!(err["retryable"], false);
 }
 
 // 9J CustomerAddress ownership
@@ -1095,4 +1107,407 @@ async fn test_get_current_cart(pool: PgPool) {
         .unwrap()
         .to_string();
     assert_eq!(cart_id, cart_id2);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_cart_row_lock_serialization(pool: PgPool) {
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_lock', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'lock@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let cart_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO carts (id, customer_id, currency_code, status) VALUES ($1, $2, 'IDR', 'active')").bind(cart_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let mut tx_a = pool.begin().await.unwrap();
+    noko_rs::cart::repository::lock_cart(&mut tx_a, cart_id, customer_id)
+        .await
+        .unwrap();
+
+    let mut mutation = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut tx_b = pool.begin().await.unwrap();
+            noko_rs::cart::repository::lock_cart(&mut tx_b, cart_id, customer_id)
+                .await
+                .unwrap();
+            tx_b.commit().await.unwrap();
+        }
+    });
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut mutation)
+            .await
+            .is_err(),
+        "mutation must remain blocked while Cart lock is held"
+    );
+
+    tx_a.commit().await.unwrap();
+
+    let result = tokio::time::timeout(std::time::Duration::from_millis(500), mutation)
+        .await
+        .expect("task should not time out")
+        .expect("task should not panic");
+    assert_eq!(result, ());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_variant_eligibility(pool: PgPool) {
+    let app = setup_test_app(pool.clone()).await;
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_var', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'var@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/store/carts")
+        .header("x-dev-auth-subject", "auth_var")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let cart_id = serde_json::from_slice::<Value>(&bytes).unwrap()["cart"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let loc_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let p_inact = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'P1', 'draft')")
+        .bind(p_inact)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v_act_inact_p = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S1', 'T1', true)").bind(v_act_inact_p).bind(p_inact).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
+    )
+    .bind(v_act_inact_p)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let i1 = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(i1)
+        .bind(v_act_inact_p)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(i1).bind(loc_id).execute(&pool).await.unwrap();
+
+    let p_act = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'P2', 'active')")
+        .bind(p_act)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v_inact_act_p = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S2', 'T2', false)").bind(v_inact_act_p).bind(p_act).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
+    )
+    .bind(v_inact_act_p)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let i2 = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(i2)
+        .bind(v_inact_act_p)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(i2).bind(loc_id).execute(&pool).await.unwrap();
+
+    let v_act_no_price = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S3', 'T3', true)").bind(v_act_no_price).bind(p_act).execute(&pool).await.unwrap();
+    let i3 = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(i3)
+        .bind(v_act_no_price)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(i3).bind(loc_id).execute(&pool).await.unwrap();
+
+    let test_cases = vec![v_act_inact_p, v_inact_act_p, v_act_no_price];
+    for var_id in test_cases {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/store/carts/{}/items", cart_id))
+            .header("x-dev-auth-subject", "auth_var")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "variant_id": var_id, "quantity": 1 }).to_string(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "failed for variant {}",
+            var_id
+        );
+        assert_eq!(err["code"], "VARIANT_NOT_FOUND");
+        assert_eq!(err["retryable"], false);
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_http_rfc3339(pool: PgPool) {
+    let app = setup_test_app(pool.clone()).await;
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_rfc', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'rfc@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let p_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'P', 'active')")
+        .bind(p_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S', 'T', true)").bind(v_id).bind(p_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
+    )
+    .bind(v_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let loc_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let inv_item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(inv_item_id)
+        .bind(v_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(inv_item_id).bind(loc_id).execute(&pool).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/store/carts")
+        .header("x-dev-auth-subject", "auth_rfc")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let cart_id = body["cart"]["id"].as_str().unwrap().to_string();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/store/carts/{}/items", cart_id))
+        .header("x-dev-auth-subject", "auth_rfc")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "variant_id": v_id, "quantity": 1 }).to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let _item_body: Value = serde_json::from_slice(&bytes).unwrap();
+    println!(
+        "ITEM BODY: {}",
+        serde_json::to_string_pretty(&_item_body).unwrap()
+    );
+
+    // GET the cart to check dates
+    let req = Request::builder()
+        .method("GET")
+        .uri("/store/carts/current")
+        .header("x-dev-auth-subject", "auth_rfc")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let get_body: Value = serde_json::from_slice(&bytes).unwrap();
+
+    println!(
+        "GET BODY: {}",
+        serde_json::to_string_pretty(&get_body).unwrap()
+    );
+    let cart = &get_body["cart"];
+    let created_at = cart["created_at"].as_str().unwrap();
+    let updated_at = cart["updated_at"].as_str().unwrap();
+    assert!(
+        time::OffsetDateTime::parse(created_at, &time::format_description::well_known::Rfc3339)
+            .is_ok()
+    );
+    assert!(
+        time::OffsetDateTime::parse(updated_at, &time::format_description::well_known::Rfc3339)
+            .is_ok()
+    );
+    assert!(cart["completed_at"].is_null());
+
+    let item = &get_body["items"][0];
+    let i_created_at = item["created_at"].as_str().unwrap();
+    let i_updated_at = item["updated_at"].as_str().unwrap();
+    assert!(
+        time::OffsetDateTime::parse(i_created_at, &time::format_description::well_known::Rfc3339)
+            .is_ok()
+    );
+    assert!(
+        time::OffsetDateTime::parse(i_updated_at, &time::format_description::well_known::Rfc3339)
+            .is_ok()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_post_invalid_quantity(pool: PgPool) {
+    let app = setup_test_app(pool.clone()).await;
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_q', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'q@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/store/carts")
+        .header("x-dev-auth-subject", "auth_q")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let cart_id = serde_json::from_slice::<Value>(&bytes).unwrap()["cart"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let p_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'P', 'active')")
+        .bind(p_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S', 'T', true)").bind(v_id).bind(p_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
+    )
+    .bind(v_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for q in [0, -1] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/store/carts/{}/items", cart_id))
+            .header("x-dev-auth-subject", "auth_q")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "variant_id": v_id, "quantity": q }).to_string(),
+            ))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(err["code"], "INVALID_QUANTITY");
+        assert_eq!(err["retryable"], false);
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_active_main_behavior_inactive(pool: PgPool) {
+    let app = setup_test_app(pool.clone()).await;
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_m', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'm@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/store/carts")
+        .header("x-dev-auth-subject", "auth_m")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let cart_id = serde_json::from_slice::<Value>(&bytes).unwrap()["cart"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let p_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title, status) VALUES ($1, 'P', 'active')")
+        .bind(p_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let v_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title, active) VALUES ($1, $2, 'S', 'T', true)").bind(v_id).bind(p_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO variant_prices (variant_id, currency_code, amount) VALUES ($1, 'IDR', 1000)",
+    )
+    .bind(v_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Deactivate MAIN
+    sqlx::query("UPDATE inventory_locations SET active = false WHERE code = 'MAIN'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let loc_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let inv_item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(inv_item_id)
+        .bind(v_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(inv_item_id).bind(loc_id).execute(&pool).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/store/carts/{}/items", cart_id))
+        .header("x-dev-auth-subject", "auth_m")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "variant_id": v_id, "quantity": 1 }).to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let err: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err["code"], "PRODUCT_NOT_AVAILABLE");
+    assert_eq!(err["retryable"], false);
 }
