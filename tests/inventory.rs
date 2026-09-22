@@ -351,3 +351,137 @@ async fn test_adjustment_audit(pool: PgPool) {
     .unwrap();
     assert_eq!(count, 1); // no new audit row
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_overflow(pool: PgPool) {
+    let product_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title) VALUES ($1, 'Prod')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let variant_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'sku_overflow', 'V')")
+        .bind(variant_id).bind(product_id).execute(&pool).await.unwrap();
+
+    let item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let location_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let level_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_levels (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, $3, $4, 0)")
+        .bind(level_id).bind(item_id).bind(location_id).bind(i64::MAX).execute(&pool).await.unwrap();
+
+    let err = adjust_inventory(
+        &pool,
+        AdjustInventoryInput {
+            inventory_item_id: item_id,
+            location_id,
+            delta: 1,
+            reason: "OVERFLOW".to_string(),
+            note: None,
+            actor_id: None,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(err, AppError::Validation { ref code, .. } if code == "INVENTORY_QUANTITY_OVERFLOW")
+    );
+
+    let stocked: i64 =
+        sqlx::query_scalar("SELECT stocked_quantity FROM inventory_levels WHERE id = $1")
+            .bind(level_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stocked, i64::MAX);
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM inventory_adjustments WHERE inventory_item_id = $1",
+    )
+    .bind(item_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_rollback(pool: PgPool) {
+    let product_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title) VALUES ($1, 'Prod')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let variant_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'sku_rollback', 'V')")
+        .bind(variant_id).bind(product_id).execute(&pool).await.unwrap();
+
+    let item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let location_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let level_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_levels (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, $3, 10, 0)")
+        .bind(level_id).bind(item_id).bind(location_id).execute(&pool).await.unwrap();
+
+    // Create a test-only constraint
+    sqlx::query("ALTER TABLE inventory_adjustments ADD CONSTRAINT test_reject_reason CHECK (reason <> 'FORCE_ROLLBACK')")
+        .execute(&pool).await.unwrap();
+
+    let res = adjust_inventory(
+        &pool,
+        AdjustInventoryInput {
+            inventory_item_id: item_id,
+            location_id,
+            delta: -3,
+            reason: "FORCE_ROLLBACK".to_string(),
+            note: None,
+            actor_id: None,
+        },
+    )
+    .await;
+
+    assert!(res.is_err());
+
+    // Should rollback, stocked should remain 10
+    let stocked: i64 =
+        sqlx::query_scalar("SELECT stocked_quantity FROM inventory_levels WHERE id = $1")
+            .bind(level_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stocked, 10);
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM inventory_adjustments WHERE inventory_item_id = $1",
+    )
+    .bind(item_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+}

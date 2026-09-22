@@ -69,19 +69,20 @@ pub async fn set_stocked(
     tx: &mut Transaction<'_, Postgres>,
     level_id: Uuid,
     new_stocked: i64,
-) -> Result<(), AppError> {
-    sqlx::query(
+) -> Result<InventoryLevel, AppError> {
+    let level: InventoryLevel = sqlx::query_as(
         r#"
         UPDATE inventory_levels 
         SET stocked_quantity = $1, updated_at = now()
         WHERE id = $2
+        RETURNING id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, created_at, updated_at
         "#,
     )
     .bind(new_stocked)
     .bind(level_id)
-    .execute(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
-    Ok(())
+    Ok(level)
 }
 
 pub async fn insert_adjustment(

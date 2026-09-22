@@ -3,6 +3,8 @@ use crate::inventory::repository;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::inventory::model::InventoryLevel;
+
 pub struct AdjustInventoryInput {
     pub inventory_item_id: Uuid,
     pub location_id: Uuid,
@@ -12,7 +14,10 @@ pub struct AdjustInventoryInput {
     pub actor_id: Option<Uuid>,
 }
 
-pub async fn adjust_inventory(pool: &PgPool, input: AdjustInventoryInput) -> Result<(), AppError> {
+pub async fn adjust_inventory(
+    pool: &PgPool,
+    input: AdjustInventoryInput,
+) -> Result<InventoryLevel, AppError> {
     let mut tx = pool.begin().await?;
 
     let level = repository::lock_level(&mut tx, input.inventory_item_id, input.location_id).await?;
@@ -26,7 +31,7 @@ pub async fn adjust_inventory(pool: &PgPool, input: AdjustInventoryInput) -> Res
         return Err(AppError::validation("NEGATIVE_STOCK"));
     }
 
-    repository::set_stocked(&mut tx, level.id, new_stocked).await?;
+    let updated_level = repository::set_stocked(&mut tx, level.id, new_stocked).await?;
 
     repository::insert_adjustment(
         &mut tx,
@@ -41,5 +46,5 @@ pub async fn adjust_inventory(pool: &PgPool, input: AdjustInventoryInput) -> Res
 
     tx.commit().await?;
 
-    Ok(())
+    Ok(updated_level)
 }
