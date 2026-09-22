@@ -2,6 +2,7 @@ use crate::app::AppState;
 use axum::{Router, routing::post};
 
 pub mod catalog;
+pub mod customers;
 pub mod inventory;
 
 pub fn router() -> Router<AppState> {
@@ -11,4 +12,5 @@ pub fn router() -> Router<AppState> {
             "/inventory/adjustments",
             post(inventory::handle_adjust_inventory),
         )
+        .route("/customers", post(customers::handle_provision_customer))
 }

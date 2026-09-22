@@ -37,3 +37,23 @@ pub async fn get_actor_by_id(
 
     Ok(actor)
 }
+
+pub async fn create_human_actor(
+    conn: &mut sqlx::PgConnection,
+    auth_subject: &str,
+    display_name: &str,
+) -> Result<Actor, AppError> {
+    let actor = sqlx::query_as::<_, Actor>(
+        r#"
+        INSERT INTO actors (kind, auth_subject, display_name, active)
+        VALUES ('human', $1, $2, true)
+        RETURNING id, kind, auth_subject, display_name, active, created_at
+        "#,
+    )
+    .bind(auth_subject)
+    .bind(display_name)
+    .fetch_one(conn)
+    .await?;
+
+    Ok(actor)
+}

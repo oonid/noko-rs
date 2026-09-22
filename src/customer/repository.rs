@@ -91,3 +91,29 @@ pub async fn create_address(
 
     Ok(new_address)
 }
+
+pub async fn create_customer(
+    conn: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    email: &str,
+    phone: Option<&str>,
+    first_name: &str,
+    last_name: &str,
+) -> Result<Customer, AppError> {
+    let customer = sqlx::query_as::<_, Customer>(
+        r#"
+        INSERT INTO customers (actor_id, email, phone, first_name, last_name)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, actor_id, email, phone, first_name, last_name, created_at, updated_at
+        "#,
+    )
+    .bind(actor_id)
+    .bind(email)
+    .bind(phone)
+    .bind(first_name)
+    .bind(last_name)
+    .fetch_one(conn)
+    .await?;
+
+    Ok(customer)
+}
