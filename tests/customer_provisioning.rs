@@ -43,7 +43,7 @@ async fn setup_app(pool: PgPool) -> (axum::Router, noko_rs::app::AppState, Uuid,
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_provision_customer_happy_path(pool: PgPool) {
-    let (app, _state, _, token) = setup_app(pool.clone()).await;
+    let (app, _state, service_actor_id, token) = setup_app(pool.clone()).await;
 
     let payload = json!({
         "auth_subject": "sub-123",
@@ -76,6 +76,7 @@ async fn test_provision_customer_happy_path(pool: PgPool) {
     assert_eq!(result.actor.kind, ActorKind::Human);
     assert!(result.actor.active);
     assert_eq!(result.customer.actor_id, result.actor.id);
+    assert_ne!(service_actor_id, result.actor.id);
 
     let actor_count: i64 = sqlx::query_scalar("SELECT count(*) FROM actors WHERE id = $1")
         .bind(result.actor.id)
@@ -113,6 +114,13 @@ async fn test_provision_customer_unauthorized(pool: PgPool) {
 
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), 401);
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["code"], "AUTH_REQUIRED");
+    assert_eq!(body["retryable"], false);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -138,6 +146,12 @@ async fn test_store_auth_integration(pool: PgPool) {
     let response = app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), 200);
 
+    let prov_body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let provision_result: ProvisionRegisteredCustomerResult =
+        serde_json::from_slice(&prov_body_bytes).unwrap();
+
     let req2 = Request::builder()
         .method("GET")
         .uri("/store/me")
@@ -151,8 +165,11 @@ async fn test_store_auth_integration(pool: PgPool) {
     let body_bytes = axum::body::to_bytes(response2.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let customer: Customer = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(customer.email, "dev@example.com");
+    let store_customer: Customer = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(store_customer.id, provision_result.customer.id);
+    assert_eq!(store_customer.actor_id, provision_result.actor.id);
+    assert_eq!(store_customer.email, provision_result.customer.email);
+    assert_eq!(store_customer.email, "dev@example.com");
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -186,6 +203,11 @@ async fn test_provision_customer_rollback(pool: PgPool) {
         "last_name": "User"
     });
 
+    let baseline_customer_count: i64 = sqlx::query_scalar("SELECT count(*) FROM customers")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
     let req2 = Request::builder()
         .method("POST")
         .uri("/ops/customers")
@@ -205,4 +227,10 @@ async fn test_provision_customer_rollback(pool: PgPool) {
             .unwrap();
 
     assert_eq!(actor_count, 0);
+
+    let final_customer_count: i64 = sqlx::query_scalar("SELECT count(*) FROM customers")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(final_customer_count, baseline_customer_count);
 }
