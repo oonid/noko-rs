@@ -20,10 +20,10 @@ where
     async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
         match AxumJson::<T>::from_request(req, state).await {
             Ok(value) => Ok(Self(value.0)),
-            Err(rejection) => {
-                let message = rejection.body_text();
-                Err(AppError::bad_request("INVALID_JSON", message))
-            }
+            Err(_rejection) => Err(AppError::bad_request(
+                "INVALID_JSON",
+                "Invalid JSON request body",
+            )),
         }
     }
 }
@@ -40,10 +40,10 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         match AxumPath::<T>::from_request_parts(parts, state).await {
             Ok(value) => Ok(Self(value.0)),
-            Err(rejection) => {
-                let message = rejection.body_text();
-                Err(AppError::bad_request("INVALID_PATH", message))
-            }
+            Err(_rejection) => Err(AppError::bad_request(
+                "INVALID_PATH",
+                "Invalid path parameter",
+            )),
         }
     }
 }

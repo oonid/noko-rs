@@ -64,10 +64,11 @@ pub async fn add_item_to_cart(
     use sqlx::Row;
     let snapshot = sqlx::query(
         r#"
-        SELECT v.title, v.sku, p.amount
+        SELECT v.title, v.sku, vp.amount
         FROM product_variants v
-        JOIN variant_prices p ON p.variant_id = v.id AND p.currency_code = 'IDR'
-        WHERE v.id = $1 AND v.active = true
+        JOIN products p ON p.id = v.product_id
+        JOIN variant_prices vp ON vp.variant_id = v.id AND vp.currency_code = 'IDR'
+        WHERE v.id = $1 AND v.active = true AND p.status = 'active'
         "#,
     )
     .bind(variant_id)

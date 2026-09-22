@@ -87,9 +87,7 @@ async fn add_item(
     Path(id): Path<Uuid>,
     Json(payload): Json<add_cart_item::AddCartItemInput>,
 ) -> Result<(StatusCode, Json<CartItem>), AppError> {
-    let mut conn = state.pool.acquire().await?;
-
-    let item = add_cart_item::execute(&mut conn, ctx.customer_id, id, payload).await?;
+    let item = add_cart_item::execute(&state.pool, ctx.customer_id, id, payload).await?;
     Ok((StatusCode::CREATED, Json(item)))
 }
 
@@ -99,9 +97,8 @@ async fn update_item(
     Path((id, item_id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<update_cart_item::UpdateCartItemInput>,
 ) -> Result<Json<CartItem>, AppError> {
-    let mut conn = state.pool.acquire().await?;
-
-    let item = update_cart_item::execute(&mut conn, ctx.customer_id, id, item_id, payload).await?;
+    let item =
+        update_cart_item::execute(&state.pool, ctx.customer_id, id, item_id, payload).await?;
     Ok(Json(item))
 }
 
@@ -110,9 +107,7 @@ async fn remove_item(
     AuthenticatedCustomer(ctx): AuthenticatedCustomer,
     Path((id, item_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, AppError> {
-    let mut conn = state.pool.acquire().await?;
-
-    remove_cart_item::execute(&mut conn, ctx.customer_id, id, item_id).await?;
+    remove_cart_item::execute(&state.pool, ctx.customer_id, id, item_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -127,10 +122,12 @@ async fn set_address(
     Path(id): Path<Uuid>,
     Json(payload): Json<SetAddressInput>,
 ) -> Result<Json<CartAddress>, AppError> {
-    let mut conn = state.pool.acquire().await?;
-
-    let addr =
-        set_cart_address::execute(&mut conn, ctx.customer_id, id, payload.customer_address_id)
-            .await?;
+    let addr = set_cart_address::execute(
+        &state.pool,
+        ctx.customer_id,
+        id,
+        payload.customer_address_id,
+    )
+    .await?;
     Ok(Json(addr))
 }
