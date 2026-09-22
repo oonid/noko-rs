@@ -49,6 +49,17 @@ These were intentionally deferred by the architecture and are now fixed for V1 i
 - Ops authentication: static Bearer token mapped to a configured service Actor; human NocoDB identity is provenance only.
 - Transient transaction retries: at most 2 retries after the first attempt; only SQLSTATE 40P01 (deadlock) and 40001 (serialization failure) are retryable.
 
+## Explicit Rulings & Updates
+- **Module-owned writes**: `application::create_sellable_variant` owns transaction boundaries. Catalog, Pricing, Inventory repositories own table inserts (`create_variant`, `create_idr_price`, `create_item`, `find_main_location`, `create_level`).
+- **Ops Actor Authority**: Ops authenticated identity comes exclusively from `OpsCaller`. Ops HTTP payload `actor_id` is forbidden. `initiator_external_ref` is provenance only.
+- **Business Validation**: Validate `delta == 0` (422 INVALID_INVENTORY_DELTA) and `amount < 0` (422) before hitting DB. Expected conflicts map to stable domain errors.
+- **Atomicity Test Strategy**: Use a real test-only DB condition (e.g. temporary CHECK constraint or trigger) to force Inventory failure after Catalog/Pricing writes, testing rollbacks natively.
+- **Add Task 5B**: "Task 5B: Registered Customer Actor provisioning". Ops-only operation (`provision_registered_customer`) that atomically creates `Actor(kind=human)` + `Customer`. If Customer fails, Actor rolls back. No address provisioning here.
+- **Service Actor Bootstrap**: Initial service Actor is a trust-root deployment prerequisite, not an unauthenticated API. Tests can seed it directly.
+- **Task 10 Update**: Update acceptance to use the Task 5B operation, then authenticate and call `POST /store/me/addresses`. No direct SQL seeding for final acceptance.
+- **Deferred Items**: Document that framework-level HTTP normalization, `updated_at` DB triggers, and migration upgrade coverage are explicitly deferred.
+
+
 ## Review Focus
 
 1. **Race between checkout and direct NocoDB price/Variant update:** checkout must lock current Variant/Price rows while validating so accepted checkout cannot race with an administrative change.
