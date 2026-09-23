@@ -1148,6 +1148,8 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
         .unwrap();
     sqlx::query("INSERT INTO inventory_levels (inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, 10, 0)").bind(inv_item_id).bind(loc_id).execute(&pool).await.unwrap();
 
+    let started = Arc::new(tokio::sync::Notify::new());
+
     let mut tx_a = pool.begin().await.unwrap();
     noko_rs::cart::repository::lock_cart(&mut tx_a, cart_id, customer_id)
         .await
@@ -1155,7 +1157,9 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
 
     let mutation = tokio::spawn({
         let pool = pool.clone();
+        let started = started.clone();
         async move {
+            started.notify_one(); // signal: "I am about to enter the application operation"
             noko_rs::application::add_cart_item::execute(
                 &pool,
                 customer_id,
@@ -1170,9 +1174,15 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
         }
     });
 
+    // Wait for mutation task to start
+    started.notified().await;
+    // Give it scheduling opportunity to reach the DB lock
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
     let mut mutation = mutation;
+    // Prove it's still blocked by the FOR UPDATE lock
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(50), &mut mutation)
+        tokio::time::timeout(std::time::Duration::from_millis(200), &mut mutation)
             .await
             .is_err(),
         "mutation must remain blocked while Cart lock is held"
@@ -1180,7 +1190,8 @@ async fn test_cart_row_lock_serialization(pool: PgPool) {
 
     tx_a.commit().await.unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_millis(500), mutation)
+    // After lock release, mutation completes
+    tokio::time::timeout(std::time::Duration::from_secs(2), mutation)
         .await
         .expect("task should not time out")
         .expect("task should not panic");
@@ -1546,4 +1557,48 @@ async fn test_active_main_behavior_inactive(pool: PgPool) {
     let err: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(err["code"], "PRODUCT_NOT_AVAILABLE");
     assert_eq!(err["retryable"], false);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_or_get_active_cart_lifecycle_race(pool: PgPool) {
+    let customer_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO actors (id, kind, auth_subject, display_name) VALUES ($1, 'human', 'auth_race', 'test')").bind(customer_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO customers (id, actor_id, email, first_name, last_name) VALUES ($1, $2, 'race@b.com', 'A', 'B')").bind(customer_id).bind(customer_id).execute(&pool).await.unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let cart_a = noko_rs::cart::repository::create_or_get_active_cart(&mut conn, customer_id)
+        .await
+        .unwrap();
+
+    let cart_a_again = noko_rs::cart::repository::create_or_get_active_cart(&mut conn, customer_id)
+        .await
+        .unwrap();
+    assert_eq!(cart_a.id, cart_a_again.id);
+
+    sqlx::query("UPDATE carts SET status = 'completed', completed_at = now() WHERE id = $1")
+        .bind(cart_a.id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    let cart_b = noko_rs::cart::repository::create_or_get_active_cart(&mut conn, customer_id)
+        .await
+        .unwrap();
+    assert_ne!(cart_a.id, cart_b.id);
+
+    let active_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM carts WHERE customer_id = $1 AND status = 'active'",
+    )
+    .bind(customer_id)
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(active_count, 1);
+
+    let a_status: String = sqlx::query_scalar("SELECT status FROM carts WHERE id = $1")
+        .bind(cart_a.id)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(a_status, "completed");
 }

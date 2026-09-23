@@ -6,32 +6,40 @@ pub async fn create_or_get_active_cart(
     conn: &mut PgConnection,
     customer_id: Uuid,
 ) -> Result<Cart, sqlx::Error> {
-    // Attempt to insert, DO NOTHING if conflict on active cart index
-    let _ = sqlx::query(
-        r#"
-        INSERT INTO carts (customer_id, currency_code, status)
-        VALUES ($1, 'IDR', 'active')
-        ON CONFLICT (customer_id) WHERE status = 'active'
-        DO NOTHING
-        "#,
-    )
-    .bind(customer_id)
-    .execute(&mut *conn)
-    .await?;
+    // Bounded retry for lifecycle race: if the active Cart that caused
+    // the INSERT conflict is completed between INSERT and SELECT,
+    // we retry to create/find the next active Cart.
+    for _ in 0..3 {
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO carts (customer_id, currency_code, status)
+            VALUES ($1, 'IDR', 'active')
+            ON CONFLICT (customer_id) WHERE status = 'active'
+            DO NOTHING
+            "#,
+        )
+        .bind(customer_id)
+        .execute(&mut *conn)
+        .await?;
 
-    // Now select the active cart
-    let cart = sqlx::query_as::<_, Cart>(
-        r#"
-        SELECT id, customer_id, currency_code, status, created_at, updated_at, completed_at
-        FROM carts
-        WHERE customer_id = $1 AND status = 'active'
-        "#,
-    )
-    .bind(customer_id)
-    .fetch_one(conn)
-    .await?;
+        let cart = sqlx::query_as::<_, Cart>(
+            r#"
+            SELECT id, customer_id, currency_code, status, created_at, updated_at, completed_at
+            FROM carts
+            WHERE customer_id = $1 AND status = 'active'
+            "#,
+        )
+        .bind(customer_id)
+        .fetch_optional(&mut *conn)
+        .await?;
 
-    Ok(cart)
+        if let Some(cart) = cart {
+            return Ok(cart);
+        }
+    }
+
+    // Exhausted retries — this is a transient lifecycle race
+    Err(sqlx::Error::RowNotFound)
 }
 
 pub async fn lock_cart(
