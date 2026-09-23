@@ -487,3 +487,81 @@ async fn test_rollback(pool: PgPool) {
     .unwrap();
     assert_eq!(count, 0);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_active_main_returns_availability(pool: PgPool) {
+    let product_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title) VALUES ($1, 'Prod')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let variant_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'sku_active_main', 'V')").bind(variant_id).bind(product_id).execute(&pool).await.unwrap();
+
+    let item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let location_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let level_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_levels (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, $3, 10, 0)")
+        .bind(level_id).bind(item_id).bind(location_id).execute(&pool).await.unwrap();
+
+    let availability = noko_rs::inventory::repository::availability_for_variant(&pool, variant_id)
+        .await
+        .unwrap();
+    assert_eq!(availability.stocked_quantity, 10);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_inactive_main_returns_inventory_not_found(pool: PgPool) {
+    let product_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO products (id, title) VALUES ($1, 'Prod')")
+        .bind(product_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let variant_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO product_variants (id, product_id, sku, title) VALUES ($1, $2, 'sku_inactive_main', 'V')").bind(variant_id).bind(product_id).execute(&pool).await.unwrap();
+
+    let item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_items (id, variant_id) VALUES ($1, $2)")
+        .bind(item_id)
+        .bind(variant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let location_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM inventory_locations WHERE code = 'MAIN'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let level_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO inventory_levels (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity) VALUES ($1, $2, $3, 10, 0)")
+        .bind(level_id).bind(item_id).bind(location_id).execute(&pool).await.unwrap();
+
+    sqlx::query("UPDATE inventory_locations SET active = false WHERE id = $1")
+        .bind(location_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = noko_rs::inventory::repository::availability_for_variant(&pool, variant_id)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, noko_rs::error::AppError::NotFound { ref code, .. } if code == "INVENTORY_NOT_FOUND")
+    );
+}

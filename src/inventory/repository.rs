@@ -25,7 +25,7 @@ pub async fn availability_for_variant(
         FROM inventory_items i
         JOIN inventory_levels l ON l.inventory_item_id = i.id
         JOIN inventory_locations loc ON loc.id = l.location_id
-        WHERE i.variant_id = $1 AND loc.code = 'MAIN'
+        WHERE i.variant_id = $1 AND loc.code = 'MAIN' AND loc.active = true
         "#,
     )
     .bind(variant_id)
